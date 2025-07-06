@@ -1,7 +1,7 @@
 ﻿-- ==================================================================================
 -- POS MINI MODULAR 3 - LATEST SCHEMA REFERENCE
 -- ==================================================================================
--- Generated: 2025-07-05 22:34:23
+-- Generated: 2025-07-06 20:07:26
 -- Source: Auto-backup script
 -- Purpose: GitHub Copilot reference for database schema
 -- 
