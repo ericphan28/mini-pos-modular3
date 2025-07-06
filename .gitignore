@@ -40,3 +40,30 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Copilot optimization files
+.copilotignore
+.vscode/settings.json
+
+# Additional build outputs
+dist/
+tmp/
+temp/
+
+# Cache directories
+.cache/
+.parcel-cache/
+
+# Backup files
+*.backup
+*.bak
+
+# Large documentation files (if any)
+*.pdf
+*.doc
+*.docx
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar

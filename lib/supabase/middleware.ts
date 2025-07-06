@@ -3,15 +3,20 @@ import { NextResponse, type NextRequest } from "next/server";
 import { hasEnvVars } from "../utils";
 
 export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  });
+  const pathname = request.nextUrl.pathname;
+  
+  // 🚀 ULTRA-PERFORMANCE: Tối thiểu logging
+  const isDev = process.env.NODE_ENV === 'development';
+  const shouldLog = isDev && pathname.startsWith('/super-admin');
+  
+  let supabaseResponse = NextResponse.next({ request });
 
-  // If the env vars are not set, skip middleware check. You can remove this once you setup the project.
+  // 🚀 OPTIMIZATION: Early return for missing env vars
   if (!hasEnvVars) {
     return supabaseResponse;
   }
 
+  // 🚀 PERFORMANCE: Single supabase client creation
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -24,9 +29,7 @@ export async function updateSession(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value),
           );
-          supabaseResponse = NextResponse.next({
-            request,
-          });
+          supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options),
           );
@@ -35,40 +38,50 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  // Do not run code between createServerClient and
-  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
+  // 🚀 ULTRA-FAST: Get user với reduced timeout
+  const { data: { user } } = await Promise.race([
+    supabase.auth.getUser(),
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Auth timeout')), 2000)
+    )
+  ]) as { data: { user: { id: string; email?: string } | null } };
 
-  // IMPORTANT: DO NOT REMOVE auth.getUser()
+  if (shouldLog) {
+    console.log(`👤 [MW] User: ${user?.id?.slice(0,8)}... ${user?.email}`);
+  }
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // 🚀 ULTRA-FAST: Optimized route checking với Set lookup
+  const publicRoutes = new Set([
+    '/', '/auth', '/login', '/admin-login'
+  ]);
+  
+  const isPublicRoute = publicRoutes.has(pathname) || 
+    pathname.startsWith('/auth/') || 
+    pathname.startsWith('/_next/') ||
+    pathname.startsWith('/api/auth/');
 
-  if (
-    request.nextUrl.pathname !== "/" &&
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
-    // no user, potentially respond by redirecting the user to the login page
+  if (shouldLog) {
+    console.log(`🛡️ [MW] Route: ${pathname} (public: ${isPublicRoute}, user: ${!!user})`);
+  }
+
+  // 🚀 FAST PATH: Handle redirects efficiently
+  if (!isPublicRoute && !user) {
+    if (shouldLog) console.log(`🚨 [MW] Redirect to login: ${pathname}`);
     const url = request.nextUrl.clone();
     url.pathname = "/auth/login";
     return NextResponse.redirect(url);
   }
 
-  // IMPORTANT: You *must* return the supabaseResponse object as it is.
-  // If you're creating a new response object with NextResponse.next() make sure to:
-  // 1. Pass the request in it, like so:
-  //    const myNewResponse = NextResponse.next({ request })
-  // 2. Copy over the cookies, like so:
-  //    myNewResponse.cookies.setAll(supabaseResponse.cookies.getAll())
-  // 3. Change the myNewResponse object to fit your needs, but avoid changing
-  //    the cookies!
-  // 4. Finally:
-  //    return myNewResponse
-  // If this is not done, you may be causing the browser and server to go out
-  // of sync and terminate the user's session prematurely!
+  // 🚀 SUPER ADMIN: Optimized super admin route handling
+  if (pathname.startsWith("/super-admin") && pathname !== "/admin-login") {
+    if (!user) {
+      if (shouldLog) console.log(`🚨 [MW] Super admin redirect: ${pathname}`);
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin-login";
+      return NextResponse.redirect(url);
+    }
+  }
 
+  if (shouldLog) console.log(`✅ [MW] Allow: ${pathname}`);
   return supabaseResponse;
 }

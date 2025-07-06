@@ -1,20 +1,58 @@
 import { updateSession } from "@/lib/supabase/middleware";
-import { type NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function middleware(request: NextRequest) {
-  return await updateSession(request);
+  const { pathname } = request.nextUrl;
+
+  // 🚀 ULTRA-FAST: Tối thiểu logging
+  const isDev = process.env.NODE_ENV === 'development';
+  
+  // ⚡ OPTIMIZATION: Aggressive static asset skipping
+  if (
+    pathname.startsWith('/_next/') ||
+    pathname.startsWith('/favicon') ||
+    pathname.includes('.') ||
+    pathname === '/admin-login'
+  ) {
+    return NextResponse.next();
+  }
+
+  // 🚀 ULTRA-PERFORMANCE: Minimal logging cho critical paths only
+  const shouldLog = isDev && (pathname.startsWith('/super-admin') || pathname.startsWith('/api'));
+  
+  if (shouldLog) {
+    console.log(`🔍 [MW] ${pathname}`);
+  }
+
+  // 🚀 PERFORMANCE: Single try-catch với timeout protection
+  try {
+    const response = await Promise.race([
+      updateSession(request),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Middleware timeout')), 3000)
+      )
+    ]) as NextResponse;
+    
+    if (shouldLog) {
+      console.log(`✅ [MW] ${pathname}`);
+    }
+    
+    return response;
+  } catch (error) {
+    console.error(`🚨 [MW] ${pathname}:`, error instanceof Error ? error.message : error);
+    return NextResponse.next();
+  }
 }
 
 export const config = {
   matcher: [
     /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - images - .svg, .png, .jpg, .jpeg, .gif, .webp
-     * Feel free to modify this pattern to include more paths.
+     * 🚀 SIMPLE: Match specific paths only
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    '/super-admin/:path*',
+    '/dashboard/:path*',
+    '/auth/:path*',
+    '/',
+    '/api/admin/:path*'
   ],
 };

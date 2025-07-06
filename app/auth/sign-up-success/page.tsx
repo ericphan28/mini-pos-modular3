@@ -14,14 +14,14 @@ export default function Page() {
           <Card>
             <CardHeader>
               <CardTitle className="text-2xl">
-                Thank you for signing up!
+                Cảm ơn bạn đã đăng ký!
               </CardTitle>
-              <CardDescription>Check your email to confirm</CardDescription>
+              <CardDescription>Kiểm tra email để xác nhận</CardDescription>
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground">
-                You&apos;ve successfully signed up. Please check your email to
-                confirm your account before signing in.
+                Bạn đã đăng ký thành công. Vui lòng kiểm tra email để
+                xác nhận tài khoản trước khi đăng nhập.
               </p>
             </CardContent>
           </Card>
