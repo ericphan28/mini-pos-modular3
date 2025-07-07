@@ -1,17 +1,50 @@
-# POS Mini Modular 3 Vietnam - Database Migrations
+# Supabase Migrations - POS Mini Modular 3
 
-## 📋 Tóm tắt
+## Migration Files Structure
 
-Migrations đã được **gộp và tối ưu hóa** thành một file duy nhất để dễ quản lý và deployment.
+### Core System Migrations (Required)
+- `001_business_subscription_system.sql` - Business subscription management
+- `002_role_permissions_matrix.sql` - User roles and permissions  
+- `003_admin_sessions.sql` - Admin session management
+- `004_enhanced_auth_functions.sql` - Enhanced authentication functions ⭐
 
-## 🗂️ Cấu trúc hiện tại
+### Feature Migrations (Optional)
+- `005_auth_access_functions.sql` - Auth schema access functions
+- `006_product_management_system.sql` - Product and category tables
+- `007_product_functions.sql` - Product management functions
 
-```
-supabase/migrations/
-├── 001_complete_schema.sql           # 🎯 MIGRATION CHÍNH (gộp tất cả)
-├── migrations_backup_20250630_150415/ # 📦 Backup migrations cũ  
-└── README.md                         # 📖 File này
-```
+### Utility Files
+- `000_migration_guide.sql` - Master guide with instructions
+- `000_run_all_migrations.sql` - Legacy comprehensive migration (deprecated)
+
+## How to Run Migrations
+
+### Method 1: Individual Migrations (Recommended)
+1. Open Supabase Dashboard → SQL Editor
+2. Copy content from each migration file in order:
+   - Run `001_business_subscription_system.sql`
+   - Run `002_role_permissions_matrix.sql`
+   - Run `003_admin_sessions.sql`
+   - Run `004_enhanced_auth_functions.sql` ⭐ **ESSENTIAL**
+3. Optionally run feature migrations 005-007
+
+### Method 2: Using Migration Guide
+1. Open `000_migration_guide.sql`
+2. Follow the instructions and verification queries
+
+## Migration Status
+✅ All core migrations (001-004) are tested and working
+✅ Enhanced auth system is implemented and functional
+✅ All files follow consistent naming convention
+
+## Important Notes
+- Migration 004 is **ESSENTIAL** for the enhanced auth system
+- All migrations are idempotent (safe to run multiple times)
+- Always run migrations in order: 001 → 002 → 003 → 004
+- Feature migrations (005-007) can be run as needed
+
+## Testing
+Run the enhanced auth test page at `/test-enhanced-auth` to verify the system after migration 004.
 
 ## ✅ File migration chính: `001_complete_schema.sql`
 

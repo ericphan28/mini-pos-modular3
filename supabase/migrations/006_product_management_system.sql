@@ -1,10 +1,9 @@
 -- ==================================================================================
--- PRODUCT MANAGEMENT SYSTEM - POS MINI MODULAR 3
+-- MIGRATION 006: Product Management System
 -- ==================================================================================
--- Description: Comprehensive product and category management system
--- Version: 1.0.0
--- Author: POS Mini Modular Team
--- Date: 2025-07-06
+-- Purpose: Comprehensive product and category management system
+-- Date: 2025-07-07
+-- Dependencies: 001-005 migrations
 -- ==================================================================================
 
 -- ==================================================================================

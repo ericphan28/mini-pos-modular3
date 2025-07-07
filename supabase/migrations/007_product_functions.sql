@@ -1,9 +1,9 @@
 -- ==================================================================================
--- PRODUCT MANAGEMENT FUNCTIONS - POS MINI MODULAR 3
+-- MIGRATION 007: Product Management Functions
 -- ==================================================================================
--- Description: Database functions for product and category management
--- Version: 1.0.0
--- Date: 2025-07-06
+-- Purpose: Database functions for product and category management
+-- Date: 2025-07-07
+-- Dependencies: 006_product_management_system.sql
 -- ==================================================================================
 
 -- ==================================================================================

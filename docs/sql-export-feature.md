@@ -3,6 +3,12 @@
 ## Tổng quan
 Tính năng **Export SQL** cho phép xuất toàn bộ database thành file SQL có thể chạy trực tiếp trong Supabase SQL Editor.
 
+## ⚠️ Migration Requirement
+**Bắt buộc chạy migration 005** để sử dụng tính năng này:
+```
+supabase/migrations/005_auth_access_functions.sql
+```
+
 ## Cách sử dụng
 
 ### 1. Truy cập Backup Manager
@@ -13,8 +19,8 @@ Tính năng **Export SQL** cho phép xuất toàn bộ database thành file SQL 
 ### 2. Export SQL
 - Click vào card "Export SQL"
 - Hệ thống sẽ tự động:
-  - Thu thập schema của tất cả user tables
-  - Export dữ liệu từng table
+  - Thu thập schema của tất cả user tables (via `pos_mini_modular3_get_all_tables_info()`)
+  - Export dữ liệu từng table (via `pos_mini_modular3_get_auth_users()` cho auth.users)
   - Tạo file SQL với định dạng Supabase-compatible
   - Download file tự động
 
@@ -25,6 +31,10 @@ Tính năng **Export SQL** cho phép xuất toàn bộ database thành file SQL 
 - Chạy script
 
 ## Đặc điểm kỹ thuật
+
+### Database Functions Required (Migration 005):
+- `pos_mini_modular3_get_all_tables_info()` - List all exportable tables
+- `pos_mini_modular3_get_auth_users()` - Safe access to auth.users table
 
 ### File SQL được tạo bao gồm:
 - **Transaction wrapper** (`BEGIN` ... `COMMIT`)

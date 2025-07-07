@@ -1,8 +1,10 @@
 -- ==================================================================================
--- AUTH ACCESS FUNCTIONS FOR EXPORT SQL API
+-- MIGRATION 005: Auth Access Functions
 -- ==================================================================================
--- Functions to safely access auth schema from export API
--- Created: 2025-07-05
+-- Purpose: Functions to safely access auth schema from export SQL API
+-- Date: 2025-07-07
+-- Dependencies: 001-004 core system migrations
+-- ==================================================================================
 
 -- Function to get all tables info like pg_dump
 CREATE OR REPLACE FUNCTION pos_mini_modular3_get_all_tables_info()

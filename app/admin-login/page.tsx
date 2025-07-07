@@ -1,4 +1,3 @@
-import AuthDebugTest from '@/components/debug/auth-test';
 import SuperAdminLoginForm from '@/components/super-admin/login-form';
 import SuperAdminStats from '@/components/super-admin/login-stats';
 import { Metadata } from 'next';
@@ -105,20 +104,7 @@ export default function SuperAdminLoginPage() {
               <p className="text-gray-600 dark:text-gray-400">
                 Secure access for system administrators
               </p>
-              
-              {/* Current Registered Super Admin Hint */}
-              <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                <div className="flex items-center justify-center text-sm text-blue-700 dark:text-blue-300">
-                  <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                  </svg>
-                  Use registered super admin credentials
-                </div>
-              </div>
             </div>
-
-            {/* DEBUG COMPONENT - Remove in production */}
-            <AuthDebugTest />
 
             {/* Login Form */}
             <SuperAdminLoginForm />
@@ -151,7 +137,7 @@ export default function SuperAdminLoginPage() {
               
               {/* Version Info */}
               <div className="mt-4 text-xs text-gray-400">
-                POS Mini Modular 3 Vietnam • Version 3.0.0 • Build 2025.07.02
+                POS Mini Modular 3 Vietnam • Version 3.0.0
               </div>
             </div>
           </div>

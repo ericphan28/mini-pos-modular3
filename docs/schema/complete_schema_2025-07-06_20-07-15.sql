@@ -1,13 +1,3 @@
-﻿-- ==================================================================================
--- POS MINI MODULAR 3 - LATEST SCHEMA REFERENCE
--- ==================================================================================
--- Generated: 2025-07-07 01:35:23
--- Source: Auto-backup script
--- Purpose: GitHub Copilot reference for database schema
--- 
--- This file is automatically updated by backup_schema_for_copilot.ps1
--- Use this file as reference when developing new features
--- ==================================================================================
 --
 -- PostgreSQL database dump
 --
@@ -868,7 +858,7 @@ BEGIN
         RAISE EXCEPTION 'Failed to create business - no ID returned';
     END IF;
 
-    -- Create user profile (sá»­ dá»¥ng Ä‘Ãºng columns theo schema)
+    -- Create user profile (sử dụng đúng columns theo schema)
     INSERT INTO pos_mini_modular3_user_profiles (
         id,
         business_id,
@@ -876,7 +866,7 @@ BEGIN
         phone,
         email,
         role,
-        status  -- Äá»•i tá»« is_active thÃ nh status
+        status  -- Đổi từ is_active thành status
     ) VALUES (
         p_user_id,
         new_business_id,
@@ -884,7 +874,7 @@ BEGIN
         p_phone,
         p_email,
         'household_owner',
-        'active'  -- Sá»­ dá»¥ng 'active' thay vÃ¬ true
+        'active'  -- Sử dụng 'active' thay vì true
     );
     
     RAISE NOTICE '[CREATE_BUSINESS] Created user profile for user: %', p_user_id;
@@ -1033,7 +1023,7 @@ BEGIN
         updated_at
     ) VALUES (
         new_user_id,
-        NULL, -- Super admin khÃ´ng thuá»™c business nÃ o
+        NULL, -- Super admin không thuộc business nào
         TRIM(p_full_name),
         TRIM(p_email),
         TRIM(p_phone),
@@ -1329,7 +1319,7 @@ CREATE FUNCTION public.pos_mini_modular3_create_super_admin(p_user_id uuid, p_fu
 DECLARE
     result jsonb;
 BEGIN
-    -- Validate inputs (thÃªm email validation)
+    -- Validate inputs (thêm email validation)
     IF LENGTH(TRIM(p_full_name)) = 0 THEN
         RETURN jsonb_build_object('success', false, 'error', 'Full name is required');
     END IF;
@@ -2025,7 +2015,7 @@ DECLARE
     business_record RECORD;
     result jsonb;
 BEGIN
-    -- Get profile (bypass RLS vá»›i SECURITY DEFINER)
+    -- Get profile (bypass RLS với SECURITY DEFINER)
     SELECT * INTO profile_record
     FROM pos_mini_modular3_user_profiles 
     WHERE id = p_user_id;
@@ -2160,7 +2150,7 @@ CREATE FUNCTION public.pos_mini_modular3_is_super_admin() RETURNS boolean
 DECLARE
     user_role text;
 BEGIN
-    -- âœ… SAME LOGIC AS FRONTEND: Check role in user_profiles
+    -- ✅ SAME LOGIC AS FRONTEND: Check role in user_profiles
     SELECT role INTO user_role
     FROM pos_mini_modular3_user_profiles 
     WHERE id = auth.uid() 
@@ -2253,11 +2243,11 @@ DECLARE
     user_exists boolean := false;
     result jsonb;
 BEGIN
-    -- ðŸ”’ SECURITY: Input validation and sanitization
+    -- 🔒 SECURITY: Input validation and sanitization
     IF p_business_name IS NULL OR trim(p_business_name) = '' THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'TÃªn há»™ kinh doanh khÃ´ng Ä‘Æ°á»£c trá»‘ng',
+            'error', 'Tên hộ kinh doanh không được trống',
             'error_code', 'INVALID_BUSINESS_NAME'
         );
     END IF;
@@ -2265,7 +2255,7 @@ BEGIN
     IF p_owner_full_name IS NULL OR trim(p_owner_full_name) = '' THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'TÃªn chá»§ há»™ khÃ´ng Ä‘Æ°á»£c trá»‘ng',
+            'error', 'Tên chủ hộ không được trống',
             'error_code', 'INVALID_OWNER_NAME'
         );
     END IF;
@@ -2273,7 +2263,7 @@ BEGIN
     IF p_contact_value IS NULL OR trim(p_contact_value) = '' THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'ThÃ´ng tin liÃªn láº¡c khÃ´ng Ä‘Æ°á»£c trá»‘ng',
+            'error', 'Thông tin liên lạc không được trống',
             'error_code', 'INVALID_CONTACT'
         );
     END IF;
@@ -2282,7 +2272,7 @@ BEGIN
     IF p_contact_method NOT IN ('email', 'phone') THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'PhÆ°Æ¡ng thá»©c liÃªn láº¡c pháº£i lÃ  email hoáº·c phone',
+            'error', 'Phương thức liên lạc phải là email hoặc phone',
             'error_code', 'INVALID_CONTACT_METHOD'
         );
     END IF;
@@ -2298,7 +2288,7 @@ BEGIN
     ) THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'Loáº¡i hÃ¬nh kinh doanh khÃ´ng há»£p lá»‡. Vui lÃ²ng chá»n tá»« danh sÃ¡ch cÃ³ sáºµn.',
+            'error', 'Loại hình kinh doanh không hợp lệ. Vui lòng chọn từ danh sách có sẵn.',
             'error_code', 'INVALID_BUSINESS_TYPE'
         );
     END IF;
@@ -2307,24 +2297,24 @@ BEGIN
     IF p_subscription_tier NOT IN ('free', 'basic', 'premium') THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'GÃ³i dá»‹ch vá»¥ khÃ´ng há»£p lá»‡',
+            'error', 'Gói dịch vụ không hợp lệ',
             'error_code', 'INVALID_SUBSCRIPTION_TIER'
         );
     END IF;
 
-    -- ðŸ” CHECK: Duplicate business name
+    -- 🔍 CHECK: Duplicate business name
     IF EXISTS (
         SELECT 1 FROM pos_mini_modular3_businesses 
         WHERE LOWER(name) = LOWER(trim(p_business_name))
     ) THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'TÃªn há»™ kinh doanh Ä‘Ã£ tá»“n táº¡i trong há»‡ thá»‘ng',
+            'error', 'Tên hộ kinh doanh đã tồn tại trong hệ thống',
             'error_code', 'DUPLICATE_BUSINESS_NAME'
         );
     END IF;
 
-    -- ðŸ” CHECK: Duplicate contact (email/phone)
+    -- 🔍 CHECK: Duplicate contact (email/phone)
     IF p_contact_method = 'email' THEN
         IF EXISTS (
             SELECT 1 FROM pos_mini_modular3_user_profiles 
@@ -2332,7 +2322,7 @@ BEGIN
         ) THEN
             RETURN jsonb_build_object(
                 'success', false,
-                'error', 'Email nÃ y Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng trong há»‡ thá»‘ng',
+                'error', 'Email này đã được sử dụng trong hệ thống',
                 'error_code', 'DUPLICATE_EMAIL'
             );
         END IF;
@@ -2343,16 +2333,16 @@ BEGIN
         ) THEN
             RETURN jsonb_build_object(
                 'success', false,
-                'error', 'Sá»‘ Ä‘iá»‡n thoáº¡i nÃ y Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng trong há»‡ thá»‘ng',
+                'error', 'Số điện thoại này đã được sử dụng trong hệ thống',
                 'error_code', 'DUPLICATE_PHONE'
             );
         END IF;
     END IF;
 
-    -- âœ… GENERATE: Business code
+    -- ✅ GENERATE: Business code
     new_business_code := 'BIZ' || extract(epoch from now())::bigint;
     
-    -- âœ… CALCULATE: Subscription limits
+    -- ✅ CALCULATE: Subscription limits
     CASE p_subscription_tier
         WHEN 'free' THEN
             max_users_limit := 3;
@@ -2368,10 +2358,10 @@ BEGIN
             max_products_limit := 50;
     END CASE;
     
-    -- âœ… CALCULATE: Trial end date (30 days from now)
+    -- ✅ CALCULATE: Trial end date (30 days from now)
     trial_ends_date := now() + interval '30 days';
     
-    -- ðŸ¢ CREATE: Business
+    -- 🏢 CREATE: Business
     INSERT INTO pos_mini_modular3_businesses (
         id,
         name,
@@ -2418,7 +2408,7 @@ BEGIN
         now()
     ) RETURNING id INTO new_business_id;
 
-    -- ðŸ‘¤ CREATE: Business owner profile (no auth.users entry needed for Super Admin created businesses)
+    -- 👤 CREATE: Business owner profile (no auth.users entry needed for Super Admin created businesses)
     INSERT INTO pos_mini_modular3_user_profiles (
         id,
         business_id,
@@ -2450,12 +2440,12 @@ BEGIN
         NULL, -- last_login_at
         NULL, -- employee_id
         NULL, -- hire_date
-        'ÄÆ°á»£c táº¡o bá»Ÿi Super Admin',
+        'Được tạo bởi Super Admin',
         now(),
         now()
     ) RETURNING id INTO new_user_id;
 
-    -- âœ… SUCCESS: Return comprehensive result
+    -- ✅ SUCCESS: Return comprehensive result
     result := jsonb_build_object(
         'success', true,
         'business_id', new_business_id,
@@ -2472,17 +2462,17 @@ BEGIN
         'contact_value', trim(p_contact_value),
         'owner_name', trim(p_owner_full_name),
         'trial_ends_at', trial_ends_date::text,
-        'message', 'Há»™ kinh doanh vÃ  chá»§ há»™ Ä‘Ã£ Ä‘Æ°á»£c táº¡o thÃ nh cÃ´ng'
+        'message', 'Hộ kinh doanh và chủ hộ đã được tạo thành công'
     );
 
     RETURN result;
 
 EXCEPTION 
     WHEN OTHERS THEN
-        -- ðŸš¨ ERROR: Comprehensive error handling
+        -- 🚨 ERROR: Comprehensive error handling
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'CÃ³ lá»—i há»‡ thá»‘ng xáº£y ra: ' || SQLERRM,
+            'error', 'Có lỗi hệ thống xảy ra: ' || SQLERRM,
             'error_code', 'SYSTEM_ERROR',
             'sqlstate', SQLSTATE
         );
@@ -2533,7 +2523,7 @@ CREATE FUNCTION public.pos_mini_modular3_super_admin_check_permission() RETURNS 
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 BEGIN
-    -- âœ… FIX: Check by role in user_profiles table instead of hardcode email
+    -- ✅ FIX: Check by role in user_profiles table instead of hardcode email
     RETURN EXISTS (
         SELECT 1 FROM pos_mini_modular3_user_profiles up
         WHERE up.id = auth.uid() 
@@ -2565,38 +2555,38 @@ DECLARE
     unique_code_found boolean := false;
     business_type_exists boolean := false;
 BEGIN
-    -- âœ… FIX: Check super admin permission first
+    -- ✅ FIX: Check super admin permission first
     IF NOT pos_mini_modular3_super_admin_check_permission() THEN
         RETURN jsonb_build_object(
             'success', false, 
-            'error', 'KhÃ´ng cÃ³ quyá»n táº¡o há»™ kinh doanh. Chá»‰ Super Admin má»›i Ä‘Æ°á»£c phÃ©p.'
+            'error', 'Không có quyền tạo hộ kinh doanh. Chỉ Super Admin mới được phép.'
         );
     END IF;
 
     -- Validate inputs
     IF TRIM(p_business_name) = '' THEN
-        RETURN jsonb_build_object('success', false, 'error', 'TÃªn há»™ kinh doanh khÃ´ng Ä‘Æ°á»£c trá»‘ng');
+        RETURN jsonb_build_object('success', false, 'error', 'Tên hộ kinh doanh không được trống');
     END IF;
 
     IF TRIM(p_contact_value) = '' THEN
-        RETURN jsonb_build_object('success', false, 'error', 'ThÃ´ng tin liÃªn láº¡c khÃ´ng Ä‘Æ°á»£c trá»‘ng');
+        RETURN jsonb_build_object('success', false, 'error', 'Thông tin liên lạc không được trống');
     END IF;
 
     IF TRIM(p_owner_full_name) = '' THEN
-        RETURN jsonb_build_object('success', false, 'error', 'TÃªn chá»§ há»™ khÃ´ng Ä‘Æ°á»£c trá»‘ng');
+        RETURN jsonb_build_object('success', false, 'error', 'Tên chủ hộ không được trống');
     END IF;
 
     -- Validate contact method
     IF p_contact_method NOT IN ('email', 'phone') THEN
-        RETURN jsonb_build_object('success', false, 'error', 'PhÆ°Æ¡ng thá»©c liÃªn láº¡c pháº£i lÃ  email hoáº·c phone');
+        RETURN jsonb_build_object('success', false, 'error', 'Phương thức liên lạc phải là email hoặc phone');
     END IF;
 
     -- Validate subscription_tier
     IF p_subscription_tier NOT IN ('free', 'basic', 'premium') THEN
-        RETURN jsonb_build_object('success', false, 'error', 'GÃ³i dá»‹ch vá»¥ khÃ´ng há»£p lá»‡');
+        RETURN jsonb_build_object('success', false, 'error', 'Gói dịch vụ không hợp lệ');
     END IF;
 
-    -- âœ… FIX: Validate business_type using business_types table instead of hard-coded values
+    -- ✅ FIX: Validate business_type using business_types table instead of hard-coded values
     SELECT EXISTS (
         SELECT 1 
         FROM pos_mini_modular3_business_types 
@@ -2607,7 +2597,7 @@ BEGIN
     IF NOT business_type_exists THEN
         RETURN jsonb_build_object(
             'success', false, 
-            'error', 'Loáº¡i hÃ¬nh kinh doanh khÃ´ng há»£p lá»‡ hoáº·c khÃ´ng hoáº¡t Ä‘á»™ng'
+            'error', 'Loại hình kinh doanh không hợp lệ hoặc không hoạt động'
         );
     END IF;
 
@@ -2617,7 +2607,7 @@ BEGIN
     IF p_contact_method = 'email' THEN
         -- Enhanced email validation
         IF clean_contact !~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' THEN
-            RETURN jsonb_build_object('success', false, 'error', 'Äá»‹nh dáº¡ng email khÃ´ng há»£p lá»‡');
+            RETURN jsonb_build_object('success', false, 'error', 'Định dạng email không hợp lệ');
         END IF;
         
         -- Check if email already exists
@@ -2627,7 +2617,7 @@ BEGIN
         LIMIT 1;
 
         IF existing_user IS NOT NULL THEN
-            RETURN jsonb_build_object('success', false, 'error', 'Email nÃ y Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng');
+            RETURN jsonb_build_object('success', false, 'error', 'Email này đã được sử dụng');
         END IF;
 
     ELSIF p_contact_method = 'phone' THEN
@@ -2636,7 +2626,7 @@ BEGIN
         
         -- Enhanced phone validation (Vietnamese format)
         IF clean_phone !~ '^(\+84|84|0)[0-9]{8,10}$' THEN
-            RETURN jsonb_build_object('success', false, 'error', 'Sá»‘ Ä‘iá»‡n thoáº¡i khÃ´ng Ä‘Ãºng Ä‘á»‹nh dáº¡ng Viá»‡t Nam (VD: 0909123456, +84909123456)');
+            RETURN jsonb_build_object('success', false, 'error', 'Số điện thoại không đúng định dạng Việt Nam (VD: 0909123456, +84909123456)');
         END IF;
         
         -- Normalize phone to +84 format
@@ -2655,11 +2645,11 @@ BEGIN
         LIMIT 1;
 
         IF existing_user IS NOT NULL THEN
-            RETURN jsonb_build_object('success', false, 'error', 'Sá»‘ Ä‘iá»‡n thoáº¡i nÃ y Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng');
+            RETURN jsonb_build_object('success', false, 'error', 'Số điện thoại này đã được sử dụng');
         END IF;
     END IF;
 
-    -- âœ… FIX: Generate unique business code with collision check
+    -- ✅ FIX: Generate unique business code with collision check
     WHILE NOT unique_code_found AND retry_count < 10 LOOP
         business_code := 'BIZ' || TO_CHAR(NOW(), 'YYYYMMDD') || LPAD(FLOOR(RANDOM() * 10000)::text, 4, '0');
         
@@ -2672,13 +2662,13 @@ BEGIN
     END LOOP;
 
     IF NOT unique_code_found THEN
-        RETURN jsonb_build_object('success', false, 'error', 'KhÃ´ng thá»ƒ táº¡o mÃ£ há»™ kinh doanh duy nháº¥t. Vui lÃ²ng thá»­ láº¡i.');
+        RETURN jsonb_build_object('success', false, 'error', 'Không thể tạo mã hộ kinh doanh duy nhất. Vui lòng thử lại.');
     END IF;
 
     -- Calculate trial end date (30 days)
     trial_end_date := NOW() + INTERVAL '30 days';
 
-    -- âœ… FIX: Determine business status correctly
+    -- ✅ FIX: Determine business status correctly
     IF p_is_active THEN
         business_status := 'active';
         subscription_status := CASE WHEN p_subscription_tier = 'free' THEN 'trial' ELSE 'active' END;
@@ -2701,13 +2691,13 @@ BEGIN
         subscription_status,
         CASE WHEN p_subscription_tier = 'free' AND p_is_active THEN trial_end_date ELSE NULL END,
         CASE WHEN p_subscription_tier = 'free' AND p_is_active THEN trial_end_date ELSE NULL END,
-        -- âœ… FIX: Correct user limits
+        -- ✅ FIX: Correct user limits
         CASE 
             WHEN p_subscription_tier = 'free' THEN 3
             WHEN p_subscription_tier = 'basic' THEN 10  
             WHEN p_subscription_tier = 'premium' THEN 50
         END,
-        -- âœ… FIX: Correct product limits
+        -- ✅ FIX: Correct product limits
         CASE 
             WHEN p_subscription_tier = 'free' THEN 50
             WHEN p_subscription_tier = 'basic' THEN 500
@@ -2717,17 +2707,17 @@ BEGIN
         NOW()
     ) RETURNING id INTO new_business_id;
 
-    -- âœ… FIX: Create auth user and profile if password provided
+    -- ✅ FIX: Create auth user and profile if password provided
     IF p_set_password IS NOT NULL AND TRIM(p_set_password) != '' THEN
         -- Validate password strength
         IF LENGTH(TRIM(p_set_password)) < 6 THEN
-            RETURN jsonb_build_object('success', false, 'error', 'Máº­t kháº©u pháº£i cÃ³ Ã­t nháº¥t 6 kÃ½ tá»±');
+            RETURN jsonb_build_object('success', false, 'error', 'Mật khẩu phải có ít nhất 6 ký tự');
         END IF;
 
         -- Generate UUID for new user
         new_user_id := gen_random_uuid();
         
-        -- âœ… FIX: Insert into auth.users with correct column names (remove non-existent columns)
+        -- ✅ FIX: Insert into auth.users with correct column names (remove non-existent columns)
         INSERT INTO auth.users (
             id,
             email,
@@ -2748,7 +2738,7 @@ BEGIN
             crypt(p_set_password, gen_salt('bf')), -- Now safe with pgcrypto extension
             CASE WHEN p_contact_method = 'email' THEN NOW() ELSE NULL END,
             CASE WHEN p_contact_method = 'phone' THEN NOW() ELSE NULL END,
-            -- âœ… FIX: Correct provider based on contact method
+            -- ✅ FIX: Correct provider based on contact method
             CASE 
                 WHEN p_contact_method = 'email' THEN '{"provider": "email", "providers": ["email"]}'::jsonb
                 ELSE '{"provider": "phone", "providers": ["phone"]}'::jsonb
@@ -2760,7 +2750,7 @@ BEGIN
             NULL
         );
 
-        -- âœ… FIX: Create user profile with correct status logic
+        -- ✅ FIX: Create user profile with correct status logic
         INSERT INTO pos_mini_modular3_user_profiles (
             id,
             business_id,
@@ -2779,7 +2769,7 @@ BEGIN
             CASE WHEN p_contact_method = 'email' THEN clean_contact ELSE NULL END,
             CASE WHEN p_contact_method = 'phone' THEN clean_contact ELSE NULL END,
             'household_owner',
-            -- âœ… FIX: Use business_status instead of undefined p_business_status
+            -- ✅ FIX: Use business_status instead of undefined p_business_status
             CASE WHEN business_status IN ('active', 'trial') THEN 'active' ELSE 'inactive' END,
             p_contact_method,
             NOW(),
@@ -2813,8 +2803,8 @@ BEGIN
             WHEN p_subscription_tier = 'premium' THEN 5000
         END,
         'message', CASE 
-            WHEN p_set_password IS NOT NULL THEN 'Há»™ kinh doanh vÃ  tÃ i khoáº£n chá»§ há»™ Ä‘Ã£ Ä‘Æ°á»£c táº¡o thÃ nh cÃ´ng'
-            ELSE 'Há»™ kinh doanh Ä‘Ã£ Ä‘Æ°á»£c táº¡o. Chá»§ há»™ cÃ³ thá»ƒ Ä‘Äƒng kÃ½ tÃ i khoáº£n riÃªng.'
+            WHEN p_set_password IS NOT NULL THEN 'Hộ kinh doanh và tài khoản chủ hộ đã được tạo thành công'
+            ELSE 'Hộ kinh doanh đã được tạo. Chủ hộ có thể đăng ký tài khoản riêng.'
         END
     );
 
@@ -2824,7 +2814,7 @@ EXCEPTION WHEN OTHERS THEN
         'success', false, 
         'error', SQLERRM,
         'error_code', SQLSTATE,
-        'hint', 'Vui lÃ²ng kiá»ƒm tra láº¡i thÃ´ng tin vÃ  thá»­ láº¡i'
+        'hint', 'Vui lòng kiểm tra lại thông tin và thử lại'
     );
 END;
 $_$;
@@ -2851,7 +2841,7 @@ BEGIN
   IF business_name_param IS NULL OR trim(business_name_param) = '' THEN
     RETURN jsonb_build_object(
       'success', false,
-      'error', 'TÃªn há»™ kinh doanh khÃ´ng Ä‘Æ°á»£c trá»‘ng'
+      'error', 'Tên hộ kinh doanh không được trống'
     );
   END IF;
 
@@ -2865,10 +2855,10 @@ BEGIN
   END IF;
 
   BEGIN
-    -- Generate IDs vá»›i function Ä‘Ãºng tÃªn
+    -- Generate IDs với function đúng tên
     business_id_var := gen_random_uuid();
     owner_user_id_var := gen_random_uuid();
-    business_code_var := pos_mini_modular3_generate_business_code();  -- âœ… ÄÃºng tÃªn
+    business_code_var := pos_mini_modular3_generate_business_code();  -- ✅ Đúng tên
     temp_password_var := COALESCE(password_param, 'temp' || substr(md5(random()::text), 1, 8));
 
     -- Create business
@@ -2883,7 +2873,7 @@ BEGIN
       phone_var,
       email_var,
       business_status_param,
-      pos_mini_modular3_get_default_business_settings(business_type_param),  -- âœ… ÄÃºng tÃªn
+      pos_mini_modular3_get_default_business_settings(business_type_param),  -- ✅ Đúng tên
       now() + interval '30 days',
       3,
       50,
@@ -2935,14 +2925,14 @@ BEGIN
       'business_code', business_code_var,
       'owner_user_id', owner_user_id_var,
       'temp_password', temp_password_var,
-      'message', 'Táº¡o há»™ kinh doanh thÃ nh cÃ´ng'
+      'message', 'Tạo hộ kinh doanh thành công'
     );
 
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS error_msg_var = MESSAGE_TEXT;
     RETURN jsonb_build_object(
       'success', false,
-      'error', 'Lá»—i: ' || error_msg_var
+      'error', 'Lỗi: ' || error_msg_var
     );
   END;
 END;
@@ -2964,7 +2954,7 @@ BEGIN
     ) THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'Chá»‰ Super Admin má»›i cÃ³ quyá»n thá»±c hiá»‡n thao tÃ¡c nÃ y'
+            'error', 'Chỉ Super Admin mới có quyền thực hiện thao tác này'
         );
     END IF;
     
@@ -2977,13 +2967,13 @@ BEGIN
     IF NOT FOUND THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'KhÃ´ng tÃ¬m tháº¥y há»™ kinh doanh'
+            'error', 'Không tìm thấy hộ kinh doanh'
         );
     END IF;
     
     RETURN jsonb_build_object(
         'success', true,
-        'message', 'XÃ³a há»™ kinh doanh thÃ nh cÃ´ng'
+        'message', 'Xóa hộ kinh doanh thành công'
     );
     
 EXCEPTION WHEN OTHERS THEN
@@ -3099,7 +3089,7 @@ BEGIN
     ) THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'Chá»‰ Super Admin má»›i cÃ³ quyá»n thá»±c hiá»‡n thao tÃ¡c nÃ y'
+            'error', 'Chỉ Super Admin mới có quyền thực hiện thao tác này'
         );
     END IF;
     
@@ -3107,7 +3097,7 @@ BEGIN
     IF p_status NOT IN ('trial', 'active', 'suspended', 'cancelled') THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'Tráº¡ng thÃ¡i khÃ´ng há»£p lá»‡'
+            'error', 'Trạng thái không hợp lệ'
         );
     END IF;
     
@@ -3122,13 +3112,13 @@ BEGIN
     IF NOT FOUND THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error', 'KhÃ´ng tÃ¬m tháº¥y há»™ kinh doanh'
+            'error', 'Không tìm thấy hộ kinh doanh'
         );
     END IF;
     
     RETURN jsonb_build_object(
         'success', true,
-        'message', 'Cáº­p nháº­t tráº¡ng thÃ¡i há»™ kinh doanh thÃ nh cÃ´ng'
+        'message', 'Cập nhật trạng thái hộ kinh doanh thành công'
     );
     
 EXCEPTION WHEN OTHERS THEN
@@ -3367,14 +3357,14 @@ CREATE FUNCTION public.pos_mini_modular3_validate_profile_creation(p_user_id uui
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 BEGIN
-    -- Äáº£m báº£o p_user_id khá»›p vá»›i user Ä‘Ã£ Ä‘Äƒng nháº­p
+    -- Đảm bảo p_user_id khớp với user đã đăng nhập
     IF p_user_id != auth.uid() THEN
-        RAISE EXCEPTION 'User ID khÃ´ng khá»›p: truyá»n vÃ o % nhÆ°ng user Ä‘Ã£ Ä‘Äƒng nháº­p lÃ  %', p_user_id, auth.uid();
+        RAISE EXCEPTION 'User ID không khớp: truyền vào % nhưng user đã đăng nhập là %', p_user_id, auth.uid();
     END IF;
     
-    -- Kiá»ƒm tra profile Ä‘Ã£ tá»“n táº¡i chÆ°a
+    -- Kiểm tra profile đã tồn tại chưa
     IF EXISTS (SELECT 1 FROM pos_mini_modular3_user_profiles WHERE id = p_user_id) THEN
-        RAISE EXCEPTION 'User profile Ä‘Ã£ tá»“n táº¡i cho user %', p_user_id;
+        RAISE EXCEPTION 'User profile đã tồn tại cho user %', p_user_id;
     END IF;
     
     RETURN true;
@@ -3405,7 +3395,7 @@ CREATE FUNCTION public.run_sql(sql text) RETURNS text
 DECLARE
     result text;
 BEGIN
-    -- Chá»‰ cho phÃ©p Super Admin sá»­ dá»¥ng function nÃ y
+    -- Chỉ cho phép Super Admin sử dụng function này
     IF NOT EXISTS (
         SELECT 1 FROM auth.users 
         WHERE auth.users.id = auth.uid() 
@@ -3414,16 +3404,16 @@ BEGIN
         RAISE EXCEPTION 'Access denied: Super Admin required';
     END IF;
     
-    -- Execute SQL vÃ  tráº£ vá» káº¿t quáº£
+    -- Execute SQL và trả về kết quả
     EXECUTE sql;
     
-    -- Tráº£ vá» thÃ´ng bÃ¡o thÃ nh cÃ´ng
+    -- Trả về thông báo thành công
     result := 'SQL executed successfully';
     RETURN result;
     
 EXCEPTION
     WHEN OTHERS THEN
-        -- Log error vÃ  re-raise
+        -- Log error và re-raise
         RAISE EXCEPTION 'SQL execution failed: %', SQLERRM;
 END;
 $$;
@@ -3437,8 +3427,8 @@ CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    NEW.updated_at = now();
-    RETURN NEW;
+  NEW.updated_at = NOW();
+  RETURN NEW;
 END;
 $$;
 
@@ -3948,24 +3938,6 @@ COMMENT ON COLUMN auth.users.is_sso_user IS 'Auth: Set this column to true when 
 
 
 --
--- Name: pos_mini_modular3_admin_sessions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pos_mini_modular3_admin_sessions (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    super_admin_id uuid NOT NULL,
-    target_business_id uuid NOT NULL,
-    impersonated_role text DEFAULT 'business_owner'::text NOT NULL,
-    session_reason text,
-    session_start timestamp with time zone DEFAULT now(),
-    session_end timestamp with time zone,
-    is_active boolean DEFAULT true,
-    created_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT admin_session_role_check CHECK ((impersonated_role = ANY (ARRAY['business_owner'::text, 'manager'::text, 'seller'::text, 'accountant'::text])))
-);
-
-
---
 -- Name: pos_mini_modular3_backup_downloads; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4140,48 +4112,12 @@ CREATE TABLE public.pos_mini_modular3_businesses (
     max_products integer DEFAULT 50,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    features_enabled jsonb DEFAULT '{}'::jsonb,
-    usage_stats jsonb DEFAULT '{}'::jsonb,
-    last_billing_date timestamp with time zone,
-    next_billing_date timestamp with time zone,
-    CONSTRAINT business_max_products_positive CHECK ((max_products > 0)),
-    CONSTRAINT business_max_users_positive CHECK ((max_users > 0)),
-    CONSTRAINT business_subscription_status_check CHECK ((subscription_status = ANY (ARRAY['trial'::text, 'active'::text, 'suspended'::text, 'expired'::text, 'cancelled'::text]))),
-    CONSTRAINT business_subscription_tier_check CHECK ((subscription_tier = ANY (ARRAY['free'::text, 'basic'::text, 'premium'::text]))),
     CONSTRAINT pos_mini_modular3_businesses_business_type_valid CHECK (((business_type IS NOT NULL) AND (length(TRIM(BOTH FROM business_type)) > 0) AND (length(business_type) <= 50))),
     CONSTRAINT pos_mini_modular3_businesses_name_check CHECK ((length(TRIM(BOTH FROM name)) > 0)),
     CONSTRAINT pos_mini_modular3_businesses_status_check CHECK ((status = ANY (ARRAY['trial'::text, 'active'::text, 'suspended'::text, 'closed'::text]))),
     CONSTRAINT pos_mini_modular3_businesses_subscription_status_check CHECK ((subscription_status = ANY (ARRAY['trial'::text, 'active'::text, 'past_due'::text, 'cancelled'::text]))),
     CONSTRAINT pos_mini_modular3_businesses_subscription_tier_check CHECK ((subscription_tier = ANY (ARRAY['free'::text, 'basic'::text, 'premium'::text])))
 );
-
-
---
--- Name: COLUMN pos_mini_modular3_businesses.subscription_tier; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_businesses.subscription_tier IS 'Business subscription plan: free, basic, premium';
-
-
---
--- Name: COLUMN pos_mini_modular3_businesses.subscription_status; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_businesses.subscription_status IS 'Current subscription status: trial, active, suspended, expired, cancelled';
-
-
---
--- Name: COLUMN pos_mini_modular3_businesses.features_enabled; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_businesses.features_enabled IS 'JSON object containing enabled features for this business';
-
-
---
--- Name: COLUMN pos_mini_modular3_businesses.usage_stats; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_businesses.usage_stats IS 'JSON object tracking current usage against limits';
 
 
 --
@@ -4230,28 +4166,6 @@ CREATE TABLE public.pos_mini_modular3_restore_points (
 --
 
 COMMENT ON TABLE public.pos_mini_modular3_restore_points IS 'Stores restore points for rollback capability';
-
-
---
--- Name: pos_mini_modular3_role_permissions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pos_mini_modular3_role_permissions (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    subscription_tier text NOT NULL,
-    user_role text NOT NULL,
-    feature_name text NOT NULL,
-    can_read boolean DEFAULT false,
-    can_write boolean DEFAULT false,
-    can_delete boolean DEFAULT false,
-    can_manage boolean DEFAULT false,
-    usage_limit integer,
-    config_data jsonb DEFAULT '{}'::jsonb,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT role_permissions_role_check CHECK ((user_role = ANY (ARRAY['business_owner'::text, 'manager'::text, 'seller'::text, 'accountant'::text, 'super_admin'::text]))),
-    CONSTRAINT role_permissions_tier_check CHECK ((subscription_tier = ANY (ARRAY['free'::text, 'basic'::text, 'premium'::text])))
-);
 
 
 --
@@ -4576,14 +4490,6 @@ ALTER TABLE ONLY auth.users
 
 
 --
--- Name: pos_mini_modular3_admin_sessions pos_mini_modular3_admin_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_admin_sessions
-    ADD CONSTRAINT pos_mini_modular3_admin_sessions_pkey PRIMARY KEY (id);
-
-
---
 -- Name: pos_mini_modular3_backup_downloads pos_mini_modular3_backup_downloads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4685,22 +4591,6 @@ ALTER TABLE ONLY public.pos_mini_modular3_restore_history
 
 ALTER TABLE ONLY public.pos_mini_modular3_restore_points
     ADD CONSTRAINT pos_mini_modular3_restore_points_pkey PRIMARY KEY (id);
-
-
---
--- Name: pos_mini_modular3_role_permissions pos_mini_modular3_role_permis_subscription_tier_user_role_f_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_role_permissions
-    ADD CONSTRAINT pos_mini_modular3_role_permis_subscription_tier_user_role_f_key UNIQUE (subscription_tier, user_role, feature_name);
-
-
---
--- Name: pos_mini_modular3_role_permissions pos_mini_modular3_role_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_role_permissions
-    ADD CONSTRAINT pos_mini_modular3_role_permissions_pkey PRIMARY KEY (id);
 
 
 --
@@ -5032,13 +4922,6 @@ CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 
 --
--- Name: idx_admin_sessions_active; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_admin_sessions_active ON public.pos_mini_modular3_admin_sessions USING btree (super_admin_id, is_active, target_business_id);
-
-
---
 -- Name: idx_backup_downloads_backup_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5127,20 +5010,6 @@ CREATE INDEX idx_business_types_category_sort ON public.pos_mini_modular3_busine
 --
 
 CREATE INDEX idx_business_types_value_active ON public.pos_mini_modular3_business_types USING btree (value, is_active);
-
-
---
--- Name: idx_businesses_subscription_status; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_businesses_subscription_status ON public.pos_mini_modular3_businesses USING btree (subscription_status);
-
-
---
--- Name: idx_businesses_subscription_tier; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_businesses_subscription_tier ON public.pos_mini_modular3_businesses USING btree (subscription_tier);
 
 
 --
@@ -5305,13 +5174,6 @@ CREATE INDEX idx_restore_points_expires_at ON public.pos_mini_modular3_restore_p
 
 
 --
--- Name: idx_role_permissions_lookup; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_role_permissions_lookup ON public.pos_mini_modular3_role_permissions USING btree (subscription_tier, user_role, feature_name);
-
-
---
 -- Name: users on_auth_user_created; Type: TRIGGER; Schema: auth; Owner: -
 --
 
@@ -5351,13 +5213,6 @@ CREATE TRIGGER update_pos_mini_modular3_subscription_plans_updated_at BEFORE UPD
 --
 
 CREATE TRIGGER update_pos_mini_modular3_user_profiles_updated_at BEFORE UPDATE ON public.pos_mini_modular3_user_profiles FOR EACH ROW EXECUTE FUNCTION public.pos_mini_modular3_update_updated_at_column();
-
-
---
--- Name: pos_mini_modular3_role_permissions update_role_permissions_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER update_role_permissions_updated_at BEFORE UPDATE ON public.pos_mini_modular3_role_permissions FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 
 --
@@ -5454,22 +5309,6 @@ ALTER TABLE ONLY auth.sso_domains
 
 ALTER TABLE ONLY public.pos_mini_modular3_businesses
     ADD CONSTRAINT fk_business_type FOREIGN KEY (business_type) REFERENCES public.pos_mini_modular3_business_types(value) ON UPDATE CASCADE ON DELETE RESTRICT;
-
-
---
--- Name: pos_mini_modular3_admin_sessions pos_mini_modular3_admin_sessions_super_admin_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_admin_sessions
-    ADD CONSTRAINT pos_mini_modular3_admin_sessions_super_admin_id_fkey FOREIGN KEY (super_admin_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_admin_sessions pos_mini_modular3_admin_sessions_target_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_admin_sessions
-    ADD CONSTRAINT pos_mini_modular3_admin_sessions_target_business_id_fkey FOREIGN KEY (target_business_id) REFERENCES public.pos_mini_modular3_businesses(id) ON DELETE CASCADE;
 
 
 --
@@ -5669,24 +5508,6 @@ CREATE POLICY "Authenticated users read all business types" ON public.pos_mini_m
 
 
 --
--- Name: pos_mini_modular3_admin_sessions Business owners can view sessions targeting their business; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Business owners can view sessions targeting their business" ON public.pos_mini_modular3_admin_sessions FOR SELECT TO authenticated USING ((target_business_id IN ( SELECT pos_mini_modular3_user_profiles.business_id
-   FROM public.pos_mini_modular3_user_profiles
-  WHERE ((pos_mini_modular3_user_profiles.id = auth.uid()) AND (pos_mini_modular3_user_profiles.role = 'business_owner'::text)))));
-
-
---
--- Name: pos_mini_modular3_admin_sessions Super admins can manage admin sessions; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Super admins can manage admin sessions" ON public.pos_mini_modular3_admin_sessions TO authenticated USING ((EXISTS ( SELECT 1
-   FROM public.pos_mini_modular3_user_profiles
-  WHERE ((pos_mini_modular3_user_profiles.id = auth.uid()) AND (pos_mini_modular3_user_profiles.role = 'super_admin'::text)))));
-
-
---
 -- Name: pos_mini_modular3_business_invitations business_managers_manage_invitations; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -5721,12 +5542,6 @@ CREATE POLICY invited_users_see_own_invitations ON public.pos_mini_modular3_busi
    FROM auth.users
   WHERE (users.id = auth.uid()))));
 
-
---
--- Name: pos_mini_modular3_admin_sessions; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.pos_mini_modular3_admin_sessions ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: pos_mini_modular3_business_invitations; Type: ROW SECURITY; Schema: public; Owner: -
@@ -5806,5 +5621,4 @@ CREATE POLICY users_own_profile_safe ON public.pos_mini_modular3_user_profiles T
 --
 -- PostgreSQL database dump complete
 --
-
 

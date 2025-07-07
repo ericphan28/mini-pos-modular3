@@ -18,6 +18,13 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Name: auth; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA auth;
+
+
+--
 -- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
 
@@ -29,6 +36,143 @@ CREATE SCHEMA public;
 --
 
 COMMENT ON SCHEMA public IS 'standard public schema';
+
+
+--
+-- Name: aal_level; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.aal_level AS ENUM (
+    'aal1',
+    'aal2',
+    'aal3'
+);
+
+
+--
+-- Name: code_challenge_method; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.code_challenge_method AS ENUM (
+    's256',
+    'plain'
+);
+
+
+--
+-- Name: factor_status; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.factor_status AS ENUM (
+    'unverified',
+    'verified'
+);
+
+
+--
+-- Name: factor_type; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.factor_type AS ENUM (
+    'totp',
+    'webauthn',
+    'phone'
+);
+
+
+--
+-- Name: one_time_token_type; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.one_time_token_type AS ENUM (
+    'confirmation_token',
+    'reauthentication_token',
+    'recovery_token',
+    'email_change_token_new',
+    'email_change_token_current',
+    'phone_change_token'
+);
+
+
+--
+-- Name: email(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.email() RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+  select 
+  coalesce(
+    nullif(current_setting('request.jwt.claim.email', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email')
+  )::text
+$$;
+
+
+--
+-- Name: FUNCTION email(); Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON FUNCTION auth.email() IS 'Deprecated. Use auth.jwt() -> ''email'' instead.';
+
+
+--
+-- Name: jwt(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.jwt() RETURNS jsonb
+    LANGUAGE sql STABLE
+    AS $$
+  select 
+    coalesce(
+        nullif(current_setting('request.jwt.claim', true), ''),
+        nullif(current_setting('request.jwt.claims', true), '')
+    )::jsonb
+$$;
+
+
+--
+-- Name: role(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.role() RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+  select 
+  coalesce(
+    nullif(current_setting('request.jwt.claim.role', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
+  )::text
+$$;
+
+
+--
+-- Name: FUNCTION role(); Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON FUNCTION auth.role() IS 'Deprecated. Use auth.jwt() -> ''role'' instead.';
+
+
+--
+-- Name: uid(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.uid() RETURNS uuid
+    LANGUAGE sql STABLE
+    AS $$
+  select 
+  coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )::uuid
+$$;
+
+
+--
+-- Name: FUNCTION uid(); Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON FUNCTION auth.uid() IS 'Deprecated. Use auth.jwt() -> ''sub'' instead.';
 
 
 --
@@ -561,151 +705,6 @@ $$;
 
 
 --
--- Name: pos_mini_modular3_check_user_permission(uuid, text, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_check_user_permission(p_user_id uuid, p_feature_name text, p_action text DEFAULT 'read'::text) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    v_user_profile record;
-    v_business record;
-    v_permission record;
-    v_current_usage integer;
-    v_usage_limit integer;
-    v_permission_granted boolean := false;
-BEGIN
-    -- Get user profile and business
-    SELECT 
-        up.role,
-        up.business_id,
-        b.subscription_tier,
-        b.subscription_status,
-        b.usage_stats
-    INTO v_user_profile
-    FROM pos_mini_modular3_user_profiles up
-    JOIN pos_mini_modular3_businesses b ON b.id = up.business_id
-    WHERE up.id = p_user_id
-    AND up.status = 'active'
-    AND b.status = 'active';
-
-    -- Check if user/business found
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'allowed', false,
-            'error', 'USER_OR_BUSINESS_NOT_FOUND',
-            'message', 'Không tìm thấy thông tin người dùng hoặc doanh nghiệp'
-        );
-    END IF;
-
-    -- Check subscription status
-    IF v_user_profile.subscription_status NOT IN ('trial', 'active') THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'allowed', false,
-            'error', 'SUBSCRIPTION_INACTIVE',
-            'message', 'Gói dịch vụ không hoạt động'
-        );
-    END IF;
-
-    -- Get permission for this feature and role
-    SELECT 
-        can_read,
-        can_write,
-        can_delete,
-        can_manage,
-        usage_limit
-    INTO v_permission
-    FROM pos_mini_modular3_role_permissions
-    WHERE subscription_tier = v_user_profile.subscription_tier
-    AND user_role = v_user_profile.role
-    AND feature_name = p_feature_name;
-
-    -- Check if permission exists
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'allowed', false,
-            'error', 'PERMISSION_NOT_DEFINED',
-            'message', 'Quyền truy cập chưa được định nghĩa cho tính năng này'
-        );
-    END IF;
-
-    -- Check action permission
-    CASE p_action
-        WHEN 'read' THEN v_permission_granted := v_permission.can_read;
-        WHEN 'write' THEN v_permission_granted := v_permission.can_write;
-        WHEN 'delete' THEN v_permission_granted := v_permission.can_delete;
-        WHEN 'manage' THEN v_permission_granted := v_permission.can_manage;
-        ELSE v_permission_granted := false;
-    END CASE;
-
-    -- If basic permission is denied
-    IF NOT v_permission_granted THEN
-        RETURN jsonb_build_object(
-            'success', true,
-            'allowed', false,
-            'error', 'PERMISSION_DENIED',
-            'message', 'Bạn không có quyền thực hiện hành động này'
-        );
-    END IF;
-
-    -- Check usage limits (if applicable)
-    IF v_permission.usage_limit IS NOT NULL THEN
-        -- Get current usage for this feature
-        v_current_usage := COALESCE(
-            (v_user_profile.usage_stats->p_feature_name)::integer,
-            0
-        );
-        
-        IF v_current_usage >= v_permission.usage_limit THEN
-            RETURN jsonb_build_object(
-                'success', true,
-                'allowed', false,
-                'error', 'USAGE_LIMIT_EXCEEDED',
-                'message', 'Đã đạt giới hạn sử dụng cho tính năng này',
-                'current_usage', v_current_usage,
-                'usage_limit', v_permission.usage_limit
-            );
-        END IF;
-    END IF;
-
-    -- Permission granted
-    RETURN jsonb_build_object(
-        'success', true,
-        'allowed', true,
-        'permission', jsonb_build_object(
-            'can_read', v_permission.can_read,
-            'can_write', v_permission.can_write,
-            'can_delete', v_permission.can_delete,
-            'can_manage', v_permission.can_manage
-        ),
-        'usage_info', jsonb_build_object(
-            'current_usage', COALESCE(v_current_usage, 0),
-            'usage_limit', v_permission.usage_limit,
-            'usage_remaining', 
-                CASE 
-                    WHEN v_permission.usage_limit IS NULL THEN null
-                    ELSE v_permission.usage_limit - COALESCE(v_current_usage, 0)
-                END
-        )
-    );
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'allowed', false,
-            'error', 'INTERNAL_ERROR',
-            'message', 'Lỗi hệ thống khi kiểm tra quyền truy cập',
-            'error_detail', SQLERRM
-        );
-END;
-$$;
-
-
---
 -- Name: pos_mini_modular3_create_business_owner(uuid, text, text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -764,123 +763,6 @@ EXCEPTION WHEN OTHERS THEN
     RETURN result;
 END;
 $$;
-
-
---
--- Name: pos_mini_modular3_create_category(text, text, uuid, text, text, text, boolean, integer); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_create_category(p_name text, p_description text DEFAULT NULL::text, p_parent_id uuid DEFAULT NULL::uuid, p_color_code text DEFAULT NULL::text, p_icon_name text DEFAULT NULL::text, p_image_url text DEFAULT NULL::text, p_is_featured boolean DEFAULT false, p_display_order integer DEFAULT 0) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  current_user_id UUID;
-  current_business_id UUID;
-  new_category_id UUID;
-  category_slug TEXT;
-  result jsonb;
-BEGIN
-  -- Get current user and business
-  current_user_id := auth.uid();
-  current_business_id := pos_mini_modular3_current_user_business_id();
-  
-  -- Validate user permission
-  IF NOT pos_mini_modular3_can_access_user_profile(current_user_id) THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Không có quyền truy cập'
-    );
-  END IF;
-  
-  -- Validate required fields
-  IF p_name IS NULL OR trim(p_name) = '' THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Tên danh mục không được để trống'
-    );
-  END IF;
-  
-  -- Generate slug from name
-  category_slug := lower(regexp_replace(trim(p_name), '[^a-zA-Z0-9\s]', '', 'g'));
-  category_slug := regexp_replace(category_slug, '\s+', '-', 'g');
-  
-  -- Validate parent category exists if provided
-  IF p_parent_id IS NOT NULL THEN
-    IF NOT EXISTS (
-      SELECT 1 FROM pos_mini_modular3_product_categories 
-      WHERE id = p_parent_id AND business_id = current_business_id
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Danh mục cha không tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Check if category name already exists in business
-  IF EXISTS (
-    SELECT 1 FROM pos_mini_modular3_product_categories 
-    WHERE business_id = current_business_id AND name = trim(p_name)
-  ) THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Tên danh mục đã tồn tại'
-    );
-  END IF;
-  
-  -- Insert new category
-  INSERT INTO pos_mini_modular3_product_categories (
-    business_id,
-    parent_id,
-    name,
-    description,
-    slug,
-    color_code,
-    icon_name,
-    image_url,
-    is_featured,
-    display_order,
-    created_by,
-    updated_by
-  ) VALUES (
-    current_business_id,
-    p_parent_id,
-    trim(p_name),
-    p_description,
-    category_slug,
-    p_color_code,
-    p_icon_name,
-    p_image_url,
-    p_is_featured,
-    p_display_order,
-    current_user_id,
-    current_user_id
-  ) RETURNING id INTO new_category_id;
-  
-  -- Return success result
-  result := jsonb_build_object(
-    'success', true,
-    'message', 'Danh mục đã được tạo thành công',
-    'category_id', new_category_id,
-    'slug', category_slug
-  );
-  
-  RETURN result;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN jsonb_build_object(
-    'success', false,
-    'error', 'Lỗi hệ thống: ' || SQLERRM
-  );
-END;
-$$;
-
-
---
--- Name: FUNCTION pos_mini_modular3_create_category(p_name text, p_description text, p_parent_id uuid, p_color_code text, p_icon_name text, p_image_url text, p_is_featured boolean, p_display_order integer); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.pos_mini_modular3_create_category(p_name text, p_description text, p_parent_id uuid, p_color_code text, p_icon_name text, p_image_url text, p_is_featured boolean, p_display_order integer) IS 'Create a new product category with validation and business isolation';
 
 
 --
@@ -1177,148 +1059,6 @@ EXCEPTION WHEN OTHERS THEN
     RETURN result;
 END;
 $$;
-
-
---
--- Name: pos_mini_modular3_create_product(text, text, uuid, text, text, numeric, numeric, integer, integer, text, boolean, boolean, text[]); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_create_product(p_name text, p_description text DEFAULT NULL::text, p_category_id uuid DEFAULT NULL::uuid, p_sku text DEFAULT NULL::text, p_barcode text DEFAULT NULL::text, p_unit_price numeric DEFAULT 0, p_cost_price numeric DEFAULT 0, p_current_stock integer DEFAULT 0, p_min_stock_level integer DEFAULT 0, p_unit_of_measure text DEFAULT 'piece'::text, p_track_stock boolean DEFAULT true, p_is_featured boolean DEFAULT false, p_tags text[] DEFAULT NULL::text[]) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  current_user_id UUID;
-  current_business_id UUID;
-  new_product_id UUID;
-  product_slug TEXT;
-  result jsonb;
-BEGIN
-  -- Get current user and business
-  current_user_id := auth.uid();
-  current_business_id := pos_mini_modular3_current_user_business_id();
-  
-  -- Validate user permission
-  IF NOT pos_mini_modular3_can_access_user_profile(current_user_id) THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Không có quyền truy cập'
-    );
-  END IF;
-  
-  -- Validate required fields
-  IF p_name IS NULL OR trim(p_name) = '' THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Tên sản phẩm không được để trống'
-    );
-  END IF;
-  
-  -- Generate slug from name
-  product_slug := lower(regexp_replace(trim(p_name), '[^a-zA-Z0-9\s]', '', 'g'));
-  product_slug := regexp_replace(product_slug, '\s+', '-', 'g');
-  
-  -- Validate category exists if provided
-  IF p_category_id IS NOT NULL THEN
-    IF NOT EXISTS (
-      SELECT 1 FROM pos_mini_modular3_product_categories 
-      WHERE id = p_category_id AND business_id = current_business_id
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Danh mục không tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Check SKU uniqueness if provided
-  IF p_sku IS NOT NULL AND trim(p_sku) != '' THEN
-    IF EXISTS (
-      SELECT 1 FROM pos_mini_modular3_products 
-      WHERE business_id = current_business_id AND sku = trim(p_sku)
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Mã SKU đã tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Check barcode uniqueness if provided
-  IF p_barcode IS NOT NULL AND trim(p_barcode) != '' THEN
-    IF EXISTS (
-      SELECT 1 FROM pos_mini_modular3_products 
-      WHERE business_id = current_business_id AND barcode = trim(p_barcode)
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Mã vạch đã tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Insert new product
-  INSERT INTO pos_mini_modular3_products (
-    business_id,
-    category_id,
-    name,
-    description,
-    sku,
-    barcode,
-    slug,
-    unit_price,
-    cost_price,
-    current_stock,
-    min_stock_level,
-    unit_of_measure,
-    track_stock,
-    is_featured,
-    tags,
-    created_by,
-    updated_by
-  ) VALUES (
-    current_business_id,
-    p_category_id,
-    trim(p_name),
-    p_description,
-    NULLIF(trim(p_sku), ''),
-    NULLIF(trim(p_barcode), ''),
-    product_slug,
-    p_unit_price,
-    p_cost_price,
-    p_current_stock,
-    p_min_stock_level,
-    p_unit_of_measure,
-    p_track_stock,
-    p_is_featured,
-    p_tags,
-    current_user_id,
-    current_user_id
-  ) RETURNING id INTO new_product_id;
-  
-  -- Return success result
-  result := jsonb_build_object(
-    'success', true,
-    'message', 'Sản phẩm đã được tạo thành công',
-    'product_id', new_product_id,
-    'slug', product_slug
-  );
-  
-  RETURN result;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN jsonb_build_object(
-    'success', false,
-    'error', 'Lỗi hệ thống: ' || SQLERRM
-  );
-END;
-$$;
-
-
---
--- Name: FUNCTION pos_mini_modular3_create_product(p_name text, p_description text, p_category_id uuid, p_sku text, p_barcode text, p_unit_price numeric, p_cost_price numeric, p_current_stock integer, p_min_stock_level integer, p_unit_of_measure text, p_track_stock boolean, p_is_featured boolean, p_tags text[]); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.pos_mini_modular3_create_product(p_name text, p_description text, p_category_id uuid, p_sku text, p_barcode text, p_unit_price numeric, p_cost_price numeric, p_current_stock integer, p_min_stock_level integer, p_unit_of_measure text, p_track_stock boolean, p_is_featured boolean, p_tags text[]) IS 'Create a new product with validation and business isolation';
 
 
 --
@@ -2231,81 +1971,6 @@ $$;
 
 
 --
--- Name: pos_mini_modular3_get_category_tree(uuid); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_get_category_tree(p_parent_id uuid DEFAULT NULL::uuid) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  current_business_id UUID;
-  result jsonb;
-BEGIN
-  current_business_id := pos_mini_modular3_current_user_business_id();
-  
-  WITH RECURSIVE category_tree AS (
-    -- Base case: categories with specified parent_id (or root categories if NULL)
-    SELECT 
-      id, name, description, parent_id, slug, color_code, icon_name, 
-      image_url, is_active, is_featured, display_order, created_at,
-      ARRAY[display_order, id::text] as sort_path,
-      0 as level
-    FROM pos_mini_modular3_product_categories
-    WHERE business_id = current_business_id 
-      AND parent_id IS NOT DISTINCT FROM p_parent_id
-      AND is_active = true
-    
-    UNION ALL
-    
-    -- Recursive case: child categories
-    SELECT 
-      c.id, c.name, c.description, c.parent_id, c.slug, c.color_code, c.icon_name,
-      c.image_url, c.is_active, c.is_featured, c.display_order, c.created_at,
-      ct.sort_path || ARRAY[c.display_order, c.id::text],
-      ct.level + 1
-    FROM pos_mini_modular3_product_categories c
-    INNER JOIN category_tree ct ON c.parent_id = ct.id
-    WHERE c.business_id = current_business_id 
-      AND c.is_active = true
-      AND ct.level < 5 -- Prevent infinite recursion
-  )
-  SELECT jsonb_agg(
-    jsonb_build_object(
-      'id', id,
-      'name', name,
-      'description', description,
-      'parent_id', parent_id,
-      'slug', slug,
-      'color_code', color_code,
-      'icon_name', icon_name,
-      'image_url', image_url,
-      'is_featured', is_featured,
-      'display_order', display_order,
-      'level', level,
-      'created_at', created_at
-    ) ORDER BY sort_path
-  ) INTO result
-  FROM category_tree;
-  
-  RETURN COALESCE(result, '[]'::jsonb);
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN jsonb_build_object(
-    'success', false,
-    'error', 'Lỗi hệ thống: ' || SQLERRM
-  );
-END;
-$$;
-
-
---
--- Name: FUNCTION pos_mini_modular3_get_category_tree(p_parent_id uuid); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.pos_mini_modular3_get_category_tree(p_parent_id uuid) IS 'Get hierarchical category tree for the current business';
-
-
---
 -- Name: pos_mini_modular3_get_current_user_info(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2336,173 +2001,6 @@ BEGIN
   );
 END;
 $$;
-
-
---
--- Name: pos_mini_modular3_get_products(uuid, text, boolean, boolean, boolean, text[], integer, integer, text, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_get_products(p_category_id uuid DEFAULT NULL::uuid, p_search_term text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_is_featured boolean DEFAULT NULL::boolean, p_has_low_stock boolean DEFAULT NULL::boolean, p_tags text[] DEFAULT NULL::text[], p_page integer DEFAULT 1, p_limit integer DEFAULT 20, p_sort_by text DEFAULT 'name'::text, p_sort_order text DEFAULT 'ASC'::text) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  current_business_id UUID;
-  total_count INTEGER;
-  products_data jsonb;
-  result jsonb;
-  offset_value INTEGER;
-  sort_column TEXT;
-BEGIN
-  current_business_id := pos_mini_modular3_current_user_business_id();
-  
-  -- Calculate offset
-  offset_value := (p_page - 1) * p_limit;
-  
-  -- Validate sort column
-  sort_column := CASE p_sort_by
-    WHEN 'name' THEN 'p.name'
-    WHEN 'price' THEN 'p.unit_price'
-    WHEN 'stock' THEN 'p.current_stock'
-    WHEN 'created' THEN 'p.created_at'
-    WHEN 'updated' THEN 'p.updated_at'
-    ELSE 'p.name'
-  END;
-  
-  -- Build dynamic query for products
-  WITH filtered_products AS (
-    SELECT 
-      p.id,
-      p.name,
-      p.description,
-      p.short_description,
-      p.sku,
-      p.barcode,
-      p.unit_price,
-      p.cost_price,
-      p.sale_price,
-      p.current_stock,
-      p.min_stock_level,
-      p.unit_of_measure,
-      p.is_active,
-      p.is_featured,
-      p.track_stock,
-      p.tags,
-      p.primary_image,
-      p.created_at,
-      p.updated_at,
-      c.name as category_name,
-      c.id as category_id,
-      -- Low stock indicator
-      CASE 
-        WHEN p.track_stock AND p.current_stock <= p.min_stock_level 
-        THEN true 
-        ELSE false 
-      END as is_low_stock
-    FROM pos_mini_modular3_products p
-    LEFT JOIN pos_mini_modular3_product_categories c ON p.category_id = c.id
-    WHERE p.business_id = current_business_id
-      AND (p_category_id IS NULL OR p.category_id = p_category_id)
-      AND (p_is_active IS NULL OR p.is_active = p_is_active)
-      AND (p_is_featured IS NULL OR p.is_featured = p_is_featured)
-      AND (p_search_term IS NULL OR p.name ILIKE '%' || p_search_term || '%')
-      AND (p_has_low_stock IS NULL OR 
-           (p_has_low_stock = true AND p.track_stock AND p.current_stock <= p.min_stock_level) OR
-           (p_has_low_stock = false AND (NOT p.track_stock OR p.current_stock > p.min_stock_level)))
-      AND (p_tags IS NULL OR p.tags && p_tags)
-  )
-  SELECT 
-    COUNT(*) OVER() as total_count,
-    jsonb_agg(
-      jsonb_build_object(
-        'id', id,
-        'name', name,
-        'description', description,
-        'short_description', short_description,
-        'sku', sku,
-        'barcode', barcode,
-        'unit_price', unit_price,
-        'cost_price', cost_price,
-        'sale_price', sale_price,
-        'current_stock', current_stock,
-        'min_stock_level', min_stock_level,
-        'unit_of_measure', unit_of_measure,
-        'is_active', is_active,
-        'is_featured', is_featured,
-        'track_stock', track_stock,
-        'is_low_stock', is_low_stock,
-        'tags', tags,
-        'primary_image', primary_image,
-        'category', jsonb_build_object(
-          'id', category_id,
-          'name', category_name
-        ),
-        'created_at', created_at,
-        'updated_at', updated_at
-      )
-    ) as products_data
-  INTO total_count, products_data
-  FROM (
-    SELECT * FROM filtered_products
-    ORDER BY 
-      CASE WHEN p_sort_order = 'ASC' THEN
-        CASE p_sort_by
-          WHEN 'name' THEN name
-          WHEN 'created' THEN created_at::text
-          WHEN 'updated' THEN updated_at::text
-        END
-      END ASC,
-      CASE WHEN p_sort_order = 'DESC' THEN
-        CASE p_sort_by
-          WHEN 'name' THEN name
-          WHEN 'created' THEN created_at::text
-          WHEN 'updated' THEN updated_at::text
-        END
-      END DESC,
-      CASE WHEN p_sort_order = 'ASC' THEN
-        CASE p_sort_by
-          WHEN 'price' THEN unit_price
-          WHEN 'stock' THEN current_stock::decimal
-        END
-      END ASC,
-      CASE WHEN p_sort_order = 'DESC' THEN
-        CASE p_sort_by
-          WHEN 'price' THEN unit_price
-          WHEN 'stock' THEN current_stock::decimal
-        END
-      END DESC
-    LIMIT p_limit OFFSET offset_value
-  ) sorted_products;
-  
-  -- Build result
-  result := jsonb_build_object(
-    'success', true,
-    'data', jsonb_build_object(
-      'products', COALESCE(products_data, '[]'::jsonb),
-      'pagination', jsonb_build_object(
-        'current_page', p_page,
-        'per_page', p_limit,
-        'total_items', COALESCE(total_count, 0),
-        'total_pages', CEIL(COALESCE(total_count, 0)::decimal / p_limit)
-      )
-    )
-  );
-  
-  RETURN result;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN jsonb_build_object(
-    'success', false,
-    'error', 'Lỗi hệ thống: ' || SQLERRM
-  );
-END;
-$$;
-
-
---
--- Name: FUNCTION pos_mini_modular3_get_products(p_category_id uuid, p_search_term text, p_is_active boolean, p_is_featured boolean, p_has_low_stock boolean, p_tags text[], p_page integer, p_limit integer, p_sort_by text, p_sort_order text); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.pos_mini_modular3_get_products(p_category_id uuid, p_search_term text, p_is_active boolean, p_is_featured boolean, p_has_low_stock boolean, p_tags text[], p_page integer, p_limit integer, p_sort_by text, p_sort_order text) IS 'Get products with advanced filtering, search, and pagination';
 
 
 --
@@ -2546,191 +2044,6 @@ BEGIN
     );
 
     RETURN result;
-END;
-$$;
-
-
---
--- Name: pos_mini_modular3_get_user_with_business_complete(uuid); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_get_user_with_business_complete(p_user_id uuid) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    v_result jsonb;
-    v_user_profile record;
-    v_business record;
-    v_permissions jsonb;
-    v_usage_stats jsonb;
-BEGIN
-    -- Get user profile với error handling
-    SELECT 
-        up.id,
-        up.id as user_id, -- Use id as user_id for compatibility
-        up.business_id,
-        up.role,
-        up.full_name,
-        up.phone,
-        up.login_method,
-        up.status as profile_status,
-        up.created_at,
-        up.updated_at
-    INTO v_user_profile
-    FROM pos_mini_modular3_user_profiles up
-    WHERE up.id = p_user_id
-    AND up.status = 'active';
-
-    -- Check if profile exists
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'USER_PROFILE_NOT_FOUND',
-            'message', 'Không tìm thấy thông tin người dùng',
-            'profile_exists', false
-        );
-    END IF;
-
-    -- Check if user has business
-    IF v_user_profile.business_id IS NULL THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'NO_BUSINESS_ASSIGNED',
-            'message', 'Tài khoản chưa được gán vào doanh nghiệp',
-            'profile_exists', true,
-            'profile', row_to_json(v_user_profile)
-        );
-    END IF;
-
-    -- Get business information với subscription details
-    SELECT 
-        b.id,
-        b.name,
-        b.business_type,
-        b.email as contact_email,
-        b.phone as contact_phone,
-        b.address,
-        b.subscription_tier,
-        b.subscription_status,
-        b.trial_ends_at as trial_end_date,
-        b.features_enabled,
-        b.usage_stats,
-        b.status,
-        bt.label as business_type_name
-    INTO v_business
-    FROM pos_mini_modular3_businesses b
-    LEFT JOIN pos_mini_modular3_business_types bt ON bt.value = b.business_type
-    WHERE b.id = v_user_profile.business_id
-    AND b.status IN ('trial', 'active');
-
-    -- Check if business exists and is active
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'BUSINESS_NOT_FOUND_OR_INACTIVE',
-            'message', 'Doanh nghiệp không tồn tại hoặc đã bị khóa',
-            'profile_exists', true,
-            'profile', row_to_json(v_user_profile)
-        );
-    END IF;
-
-    -- Check subscription status
-    IF v_business.subscription_status NOT IN ('trial', 'active') THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'SUBSCRIPTION_INACTIVE',
-            'message', 'Gói dịch vụ đã hết hạn hoặc bị tạm dừng',
-            'profile_exists', true,
-            'profile', row_to_json(v_user_profile),
-            'business', row_to_json(v_business),
-            'subscription_status', v_business.subscription_status
-        );
-    END IF;
-
-    -- Check trial expiry
-    IF v_business.subscription_status = 'trial' 
-       AND v_business.trial_end_date IS NOT NULL 
-       AND v_business.trial_end_date < CURRENT_TIMESTAMP THEN
-        
-        -- Auto-update subscription status to expired
-        UPDATE pos_mini_modular3_businesses 
-        SET subscription_status = 'expired',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = v_business.id;
-        
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'TRIAL_EXPIRED',
-            'message', 'Thời gian dùng thử đã hết hạn',
-            'profile_exists', true,
-            'profile', row_to_json(v_user_profile),
-            'business', row_to_json(v_business),
-            'trial_end_date', v_business.trial_end_date
-        );
-    END IF;
-
-    -- Get user permissions for this role and subscription tier
-    SELECT jsonb_object_agg(
-        rp.feature_name,
-        jsonb_build_object(
-            'can_read', rp.can_read,
-            'can_write', rp.can_write,
-            'can_delete', rp.can_delete,
-            'can_manage', rp.can_manage,
-            'usage_limit', rp.usage_limit
-        )
-    ) INTO v_permissions
-    FROM pos_mini_modular3_role_permissions rp
-    WHERE rp.subscription_tier = v_business.subscription_tier
-    AND rp.user_role = v_user_profile.role;
-
-    -- Build successful result
-    v_result := jsonb_build_object(
-        'success', true,
-        'profile_exists', true,
-        'user', jsonb_build_object(
-            'id', p_user_id,
-            'profile_id', v_user_profile.id,
-            'email', (SELECT email FROM auth.users WHERE id = p_user_id),
-            'role', v_user_profile.role,
-            'full_name', v_user_profile.full_name,
-            'phone', v_user_profile.phone,
-            'login_method', v_user_profile.login_method,
-            'status', v_user_profile.profile_status
-        ),
-        'business', jsonb_build_object(
-            'id', v_business.id,
-            'name', v_business.name,
-            'business_type', v_business.business_type,
-            'business_type_name', v_business.business_type_name,
-            'code', v_business.code,
-            'contact_email', v_business.contact_email,
-            'contact_phone', v_business.contact_phone,
-            'address', v_business.address,
-            'subscription_tier', v_business.subscription_tier,
-            'subscription_status', v_business.subscription_status,
-            'trial_end_date', v_business.trial_ends_at,
-            'features_enabled', COALESCE(v_business.features_enabled, '{}'::jsonb),
-            'usage_stats', COALESCE(v_business.usage_stats, '{}'::jsonb),
-            'status', v_business.status
-        ),
-        'permissions', COALESCE(v_permissions, '{}'::jsonb),
-        'session_info', jsonb_build_object(
-            'login_time', CURRENT_TIMESTAMP,
-            'user_agent', current_setting('request.headers', true)::jsonb->>'user-agent'
-        )
-    );
-
-    RETURN v_result;
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'INTERNAL_ERROR',
-            'message', 'Lỗi hệ thống khi tải thông tin người dùng',
-            'error_detail', SQLERRM
-        );
 END;
 $$;
 
@@ -3901,400 +3214,6 @@ $$;
 
 
 --
--- Name: pos_mini_modular3_update_category(uuid, text, text, uuid, text, text, text, boolean, boolean, integer); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_update_category(p_category_id uuid, p_name text DEFAULT NULL::text, p_description text DEFAULT NULL::text, p_parent_id uuid DEFAULT NULL::uuid, p_color_code text DEFAULT NULL::text, p_icon_name text DEFAULT NULL::text, p_image_url text DEFAULT NULL::text, p_is_featured boolean DEFAULT NULL::boolean, p_is_active boolean DEFAULT NULL::boolean, p_display_order integer DEFAULT NULL::integer) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  current_user_id UUID;
-  current_business_id UUID;
-  category_record RECORD;
-  new_slug TEXT;
-  result jsonb;
-BEGIN
-  -- Get current user and business
-  current_user_id := auth.uid();
-  current_business_id := pos_mini_modular3_current_user_business_id();
-  
-  -- Validate user permission
-  IF NOT pos_mini_modular3_can_access_user_profile(current_user_id) THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Không có quyền truy cập'
-    );
-  END IF;
-  
-  -- Check if category exists and belongs to current business
-  SELECT * INTO category_record
-  FROM pos_mini_modular3_product_categories
-  WHERE id = p_category_id AND business_id = current_business_id;
-  
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Danh mục không tồn tại'
-    );
-  END IF;
-  
-  -- Validate parent category if provided
-  IF p_parent_id IS NOT NULL AND p_parent_id != category_record.parent_id THEN
-    -- Prevent circular reference
-    IF p_parent_id = p_category_id THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Không thể chọn chính danh mục này làm danh mục cha'
-      );
-    END IF;
-    
-    -- Check if parent exists
-    IF NOT EXISTS (
-      SELECT 1 FROM pos_mini_modular3_product_categories 
-      WHERE id = p_parent_id AND business_id = current_business_id
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Danh mục cha không tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Generate new slug if name is updated
-  IF p_name IS NOT NULL AND trim(p_name) != category_record.name THEN
-    new_slug := lower(regexp_replace(trim(p_name), '[^a-zA-Z0-9\s]', '', 'g'));
-    new_slug := regexp_replace(new_slug, '\s+', '-', 'g');
-    
-    -- Check if new name already exists
-    IF EXISTS (
-      SELECT 1 FROM pos_mini_modular3_product_categories 
-      WHERE business_id = current_business_id 
-        AND name = trim(p_name) 
-        AND id != p_category_id
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Tên danh mục đã tồn tại'
-      );
-    END IF;
-  ELSE
-    new_slug := category_record.slug;
-  END IF;
-  
-  -- Update category
-  UPDATE pos_mini_modular3_product_categories SET
-    name = COALESCE(trim(p_name), name),
-    description = COALESCE(p_description, description),
-    parent_id = COALESCE(p_parent_id, parent_id),
-    slug = new_slug,
-    color_code = COALESCE(p_color_code, color_code),
-    icon_name = COALESCE(p_icon_name, icon_name),
-    image_url = COALESCE(p_image_url, image_url),
-    is_featured = COALESCE(p_is_featured, is_featured),
-    is_active = COALESCE(p_is_active, is_active),
-    display_order = COALESCE(p_display_order, display_order),
-    updated_by = current_user_id
-  WHERE id = p_category_id;
-  
-  -- Return success result
-  result := jsonb_build_object(
-    'success', true,
-    'message', 'Danh mục đã được cập nhật thành công',
-    'category_id', p_category_id
-  );
-  
-  RETURN result;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN jsonb_build_object(
-    'success', false,
-    'error', 'Lỗi hệ thống: ' || SQLERRM
-  );
-END;
-$$;
-
-
---
--- Name: FUNCTION pos_mini_modular3_update_category(p_category_id uuid, p_name text, p_description text, p_parent_id uuid, p_color_code text, p_icon_name text, p_image_url text, p_is_featured boolean, p_is_active boolean, p_display_order integer); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.pos_mini_modular3_update_category(p_category_id uuid, p_name text, p_description text, p_parent_id uuid, p_color_code text, p_icon_name text, p_image_url text, p_is_featured boolean, p_is_active boolean, p_display_order integer) IS 'Update existing product category with validation';
-
-
---
--- Name: pos_mini_modular3_update_category_timestamp(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_update_category_timestamp() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$;
-
-
---
--- Name: pos_mini_modular3_update_product(uuid, text, text, uuid, text, text, numeric, numeric, numeric, integer, integer, text, boolean, boolean, boolean, text[]); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_update_product(p_product_id uuid, p_name text DEFAULT NULL::text, p_description text DEFAULT NULL::text, p_category_id uuid DEFAULT NULL::uuid, p_sku text DEFAULT NULL::text, p_barcode text DEFAULT NULL::text, p_unit_price numeric DEFAULT NULL::numeric, p_cost_price numeric DEFAULT NULL::numeric, p_sale_price numeric DEFAULT NULL::numeric, p_current_stock integer DEFAULT NULL::integer, p_min_stock_level integer DEFAULT NULL::integer, p_unit_of_measure text DEFAULT NULL::text, p_track_stock boolean DEFAULT NULL::boolean, p_is_active boolean DEFAULT NULL::boolean, p_is_featured boolean DEFAULT NULL::boolean, p_tags text[] DEFAULT NULL::text[]) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  current_user_id UUID;
-  current_business_id UUID;
-  product_record RECORD;
-  new_slug TEXT;
-  result jsonb;
-BEGIN
-  -- Get current user and business
-  current_user_id := auth.uid();
-  current_business_id := pos_mini_modular3_current_user_business_id();
-  
-  -- Validate user permission
-  IF NOT pos_mini_modular3_can_access_user_profile(current_user_id) THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Không có quyền truy cập'
-    );
-  END IF;
-  
-  -- Check if product exists and belongs to current business
-  SELECT * INTO product_record
-  FROM pos_mini_modular3_products
-  WHERE id = p_product_id AND business_id = current_business_id;
-  
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Sản phẩm không tồn tại'
-    );
-  END IF;
-  
-  -- Validate category if provided
-  IF p_category_id IS NOT NULL AND p_category_id != product_record.category_id THEN
-    IF NOT EXISTS (
-      SELECT 1 FROM pos_mini_modular3_product_categories 
-      WHERE id = p_category_id AND business_id = current_business_id
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Danh mục không tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Generate new slug if name is updated
-  IF p_name IS NOT NULL AND trim(p_name) != product_record.name THEN
-    new_slug := lower(regexp_replace(trim(p_name), '[^a-zA-Z0-9\s]', '', 'g'));
-    new_slug := regexp_replace(new_slug, '\s+', '-', 'g');
-  ELSE
-    new_slug := product_record.slug;
-  END IF;
-  
-  -- Check SKU uniqueness if updated
-  IF p_sku IS NOT NULL AND trim(p_sku) != COALESCE(product_record.sku, '') THEN
-    IF trim(p_sku) != '' AND EXISTS (
-      SELECT 1 FROM pos_mini_modular3_products 
-      WHERE business_id = current_business_id 
-        AND sku = trim(p_sku) 
-        AND id != p_product_id
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Mã SKU đã tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Check barcode uniqueness if updated
-  IF p_barcode IS NOT NULL AND trim(p_barcode) != COALESCE(product_record.barcode, '') THEN
-    IF trim(p_barcode) != '' AND EXISTS (
-      SELECT 1 FROM pos_mini_modular3_products 
-      WHERE business_id = current_business_id 
-        AND barcode = trim(p_barcode) 
-        AND id != p_product_id
-    ) THEN
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Mã vạch đã tồn tại'
-      );
-    END IF;
-  END IF;
-  
-  -- Update product
-  UPDATE pos_mini_modular3_products SET
-    name = COALESCE(trim(p_name), name),
-    description = COALESCE(p_description, description),
-    category_id = COALESCE(p_category_id, category_id),
-    sku = CASE 
-      WHEN p_sku IS NOT NULL THEN NULLIF(trim(p_sku), '') 
-      ELSE sku 
-    END,
-    barcode = CASE 
-      WHEN p_barcode IS NOT NULL THEN NULLIF(trim(p_barcode), '') 
-      ELSE barcode 
-    END,
-    slug = new_slug,
-    unit_price = COALESCE(p_unit_price, unit_price),
-    cost_price = COALESCE(p_cost_price, cost_price),
-    sale_price = COALESCE(p_sale_price, sale_price),
-    current_stock = COALESCE(p_current_stock, current_stock),
-    min_stock_level = COALESCE(p_min_stock_level, min_stock_level),
-    unit_of_measure = COALESCE(p_unit_of_measure, unit_of_measure),
-    track_stock = COALESCE(p_track_stock, track_stock),
-    is_active = COALESCE(p_is_active, is_active),
-    is_featured = COALESCE(p_is_featured, is_featured),
-    tags = COALESCE(p_tags, tags),
-    updated_by = current_user_id
-  WHERE id = p_product_id;
-  
-  -- Return success result
-  result := jsonb_build_object(
-    'success', true,
-    'message', 'Sản phẩm đã được cập nhật thành công',
-    'product_id', p_product_id
-  );
-  
-  RETURN result;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN jsonb_build_object(
-    'success', false,
-    'error', 'Lỗi hệ thống: ' || SQLERRM
-  );
-END;
-$$;
-
-
---
--- Name: FUNCTION pos_mini_modular3_update_product(p_product_id uuid, p_name text, p_description text, p_category_id uuid, p_sku text, p_barcode text, p_unit_price numeric, p_cost_price numeric, p_sale_price numeric, p_current_stock integer, p_min_stock_level integer, p_unit_of_measure text, p_track_stock boolean, p_is_active boolean, p_is_featured boolean, p_tags text[]); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.pos_mini_modular3_update_product(p_product_id uuid, p_name text, p_description text, p_category_id uuid, p_sku text, p_barcode text, p_unit_price numeric, p_cost_price numeric, p_sale_price numeric, p_current_stock integer, p_min_stock_level integer, p_unit_of_measure text, p_track_stock boolean, p_is_active boolean, p_is_featured boolean, p_tags text[]) IS 'Update existing product with comprehensive validation';
-
-
---
--- Name: pos_mini_modular3_update_product_stock(uuid, integer, text, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_update_product_stock(p_product_id uuid, p_quantity_change integer, p_operation text DEFAULT 'add'::text, p_reason text DEFAULT NULL::text) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  current_user_id UUID;
-  current_business_id UUID;
-  product_record RECORD;
-  new_stock INTEGER;
-  result jsonb;
-BEGIN
-  -- Get current user and business
-  current_user_id := auth.uid();
-  current_business_id := pos_mini_modular3_current_user_business_id();
-  
-  -- Validate user permission
-  IF NOT pos_mini_modular3_can_access_user_profile(current_user_id) THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Không có quyền truy cập'
-    );
-  END IF;
-  
-  -- Get product
-  SELECT * INTO product_record
-  FROM pos_mini_modular3_products
-  WHERE id = p_product_id AND business_id = current_business_id;
-  
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Sản phẩm không tồn tại'
-    );
-  END IF;
-  
-  -- Check if product tracks stock
-  IF NOT product_record.track_stock THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Sản phẩm này không theo dõi tồn kho'
-    );
-  END IF;
-  
-  -- Calculate new stock based on operation
-  CASE p_operation
-    WHEN 'add' THEN
-      new_stock := product_record.current_stock + p_quantity_change;
-    WHEN 'subtract' THEN
-      new_stock := product_record.current_stock - p_quantity_change;
-    WHEN 'set' THEN
-      new_stock := p_quantity_change;
-    ELSE
-      RETURN jsonb_build_object(
-        'success', false,
-        'error', 'Thao tác không hợp lệ'
-      );
-  END CASE;
-  
-  -- Validate new stock
-  IF new_stock < 0 THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'Số lượng tồn kho không thể âm'
-    );
-  END IF;
-  
-  -- Update stock
-  UPDATE pos_mini_modular3_products 
-  SET 
-    current_stock = new_stock,
-    updated_by = current_user_id
-  WHERE id = p_product_id;
-  
-  -- Return success result
-  result := jsonb_build_object(
-    'success', true,
-    'message', 'Cập nhật tồn kho thành công',
-    'product_id', p_product_id,
-    'old_stock', product_record.current_stock,
-    'new_stock', new_stock,
-    'change', new_stock - product_record.current_stock
-  );
-  
-  RETURN result;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN jsonb_build_object(
-    'success', false,
-    'error', 'Lỗi hệ thống: ' || SQLERRM
-  );
-END;
-$$;
-
-
---
--- Name: FUNCTION pos_mini_modular3_update_product_stock(p_product_id uuid, p_quantity_change integer, p_operation text, p_reason text); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.pos_mini_modular3_update_product_stock(p_product_id uuid, p_quantity_change integer, p_operation text, p_reason text) IS 'Update product stock with operation tracking';
-
-
---
--- Name: pos_mini_modular3_update_product_timestamp(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_update_product_timestamp() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$;
-
-
---
 -- Name: pos_mini_modular3_update_staff_member(uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -4412,84 +3331,6 @@ $$;
 
 
 --
--- Name: pos_mini_modular3_update_usage_stats(uuid, text, integer); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_update_usage_stats(p_business_id uuid, p_feature_name text, p_increment integer DEFAULT 1) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    v_new_usage integer;
-    v_usage_limit integer;
-    v_current_tier text;
-BEGIN
-    -- Get current tier and usage
-    SELECT 
-        subscription_tier,
-        COALESCE((usage_stats->p_feature_name)::integer, 0)
-    INTO v_current_tier, v_new_usage
-    FROM pos_mini_modular3_businesses
-    WHERE id = p_business_id;
-
-    -- Calculate new usage
-    v_new_usage := v_new_usage + p_increment;
-
-    -- Update usage stats
-    UPDATE pos_mini_modular3_businesses
-    SET usage_stats = jsonb_set(
-            COALESCE(usage_stats, '{}'::jsonb),
-            ARRAY[p_feature_name],
-            to_jsonb(v_new_usage)
-        ),
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = p_business_id;
-
-    -- Get usage limit for validation
-    SELECT usage_limit INTO v_usage_limit
-    FROM pos_mini_modular3_role_permissions
-    WHERE subscription_tier = v_current_tier
-    AND feature_name = p_feature_name
-    LIMIT 1;
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'feature_name', p_feature_name,
-        'new_usage', v_new_usage,
-        'usage_limit', v_usage_limit,
-        'limit_exceeded', 
-            CASE 
-                WHEN v_usage_limit IS NULL THEN false
-                ELSE v_new_usage > v_usage_limit
-            END
-    );
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'UPDATE_FAILED',
-            'message', 'Không thể cập nhật thống kê sử dụng',
-            'error_detail', SQLERRM
-        );
-END;
-$$;
-
-
---
--- Name: pos_mini_modular3_update_variant_timestamp(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_update_variant_timestamp() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$;
-
-
---
 -- Name: pos_mini_modular3_user_belongs_to_business(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -4527,103 +3368,6 @@ BEGIN
     END IF;
     
     RETURN true;
-END;
-$$;
-
-
---
--- Name: pos_mini_modular3_validate_subscription(uuid); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pos_mini_modular3_validate_subscription(p_business_id uuid) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    v_business record;
-    v_needs_update boolean := false;
-    v_new_status text;
-BEGIN
-    -- Get current business subscription info
-    SELECT 
-        subscription_tier,
-        subscription_status,
-        trial_ends_at as trial_end_date,
-        created_at
-    INTO v_business
-    FROM pos_mini_modular3_businesses
-    WHERE id = p_business_id;
-
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'BUSINESS_NOT_FOUND',
-            'message', 'Không tìm thấy doanh nghiệp'
-        );
-    END IF;
-
-    -- Check if trial has expired
-    IF v_business.subscription_status = 'trial' 
-       AND v_business.trial_end_date IS NOT NULL 
-       AND v_business.trial_end_date < CURRENT_TIMESTAMP THEN
-        
-        v_needs_update := true;
-        v_new_status := 'expired';
-        
-    -- Check if trial should be set (business was just created)
-    ELSIF v_business.subscription_status IS NULL 
-          AND v_business.trial_end_date IS NULL THEN
-        
-        v_needs_update := true;
-        v_new_status := 'trial';
-    
-    END IF;
-
-    -- Update subscription status if needed
-    IF v_needs_update THEN
-        UPDATE pos_mini_modular3_businesses
-        SET subscription_status = v_new_status,
-            trial_ends_at = CASE 
-                WHEN v_new_status = 'trial' AND trial_ends_at IS NULL 
-                THEN CURRENT_TIMESTAMP + INTERVAL '30 days'
-                ELSE trial_ends_at
-            END,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = p_business_id;
-        
-        -- Refresh data
-        SELECT 
-            subscription_tier,
-            subscription_status,
-            trial_ends_at as trial_end_date
-        INTO v_business
-        FROM pos_mini_modular3_businesses
-        WHERE id = p_business_id;
-    END IF;
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'subscription_tier', v_business.subscription_tier,
-        'subscription_status', v_business.subscription_status,
-        'trial_end_date', v_business.trial_end_date,
-        'is_active', v_business.subscription_status IN ('trial', 'active'),
-        'days_remaining', 
-            CASE 
-                WHEN v_business.subscription_status = 'trial' 
-                     AND v_business.trial_end_date IS NOT NULL
-                THEN EXTRACT(DAYS FROM v_business.trial_end_date - CURRENT_TIMESTAMP)
-                ELSE null
-            END,
-        'updated', v_needs_update
-    );
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'VALIDATION_FAILED',
-            'message', 'Lỗi khi kiểm tra trạng thái subscription',
-            'error_detail', SQLERRM
-        );
 END;
 $$;
 
@@ -4760,6 +3504,438 @@ $$;
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
+
+--
+-- Name: audit_log_entries; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.audit_log_entries (
+    instance_id uuid,
+    id uuid NOT NULL,
+    payload json,
+    created_at timestamp with time zone,
+    ip_address character varying(64) DEFAULT ''::character varying NOT NULL
+);
+
+
+--
+-- Name: TABLE audit_log_entries; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.audit_log_entries IS 'Auth: Audit trail for user actions.';
+
+
+--
+-- Name: flow_state; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.flow_state (
+    id uuid NOT NULL,
+    user_id uuid,
+    auth_code text NOT NULL,
+    code_challenge_method auth.code_challenge_method NOT NULL,
+    code_challenge text NOT NULL,
+    provider_type text NOT NULL,
+    provider_access_token text,
+    provider_refresh_token text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    authentication_method text NOT NULL,
+    auth_code_issued_at timestamp with time zone
+);
+
+
+--
+-- Name: TABLE flow_state; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.flow_state IS 'stores metadata for pkce logins';
+
+
+--
+-- Name: identities; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.identities (
+    provider_id text NOT NULL,
+    user_id uuid NOT NULL,
+    identity_data jsonb NOT NULL,
+    provider text NOT NULL,
+    last_sign_in_at timestamp with time zone,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    email text GENERATED ALWAYS AS (lower((identity_data ->> 'email'::text))) STORED,
+    id uuid DEFAULT gen_random_uuid() NOT NULL
+);
+
+
+--
+-- Name: TABLE identities; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.identities IS 'Auth: Stores identities associated to a user.';
+
+
+--
+-- Name: COLUMN identities.email; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.identities.email IS 'Auth: Email is a generated column that references the optional email property in the identity_data';
+
+
+--
+-- Name: instances; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.instances (
+    id uuid NOT NULL,
+    uuid uuid,
+    raw_base_config text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone
+);
+
+
+--
+-- Name: TABLE instances; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.instances IS 'Auth: Manages users across multiple sites.';
+
+
+--
+-- Name: mfa_amr_claims; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.mfa_amr_claims (
+    session_id uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    authentication_method text NOT NULL,
+    id uuid NOT NULL
+);
+
+
+--
+-- Name: TABLE mfa_amr_claims; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.mfa_amr_claims IS 'auth: stores authenticator method reference claims for multi factor authentication';
+
+
+--
+-- Name: mfa_challenges; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.mfa_challenges (
+    id uuid NOT NULL,
+    factor_id uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    verified_at timestamp with time zone,
+    ip_address inet NOT NULL,
+    otp_code text,
+    web_authn_session_data jsonb
+);
+
+
+--
+-- Name: TABLE mfa_challenges; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.mfa_challenges IS 'auth: stores metadata about challenge requests made';
+
+
+--
+-- Name: mfa_factors; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.mfa_factors (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    friendly_name text,
+    factor_type auth.factor_type NOT NULL,
+    status auth.factor_status NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    secret text,
+    phone text,
+    last_challenged_at timestamp with time zone,
+    web_authn_credential jsonb,
+    web_authn_aaguid uuid
+);
+
+
+--
+-- Name: TABLE mfa_factors; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.mfa_factors IS 'auth: stores metadata about factors';
+
+
+--
+-- Name: one_time_tokens; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.one_time_tokens (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    token_type auth.one_time_token_type NOT NULL,
+    token_hash text NOT NULL,
+    relates_to text NOT NULL,
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT one_time_tokens_token_hash_check CHECK ((char_length(token_hash) > 0))
+);
+
+
+--
+-- Name: refresh_tokens; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.refresh_tokens (
+    instance_id uuid,
+    id bigint NOT NULL,
+    token character varying(255),
+    user_id character varying(255),
+    revoked boolean,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    parent character varying(255),
+    session_id uuid
+);
+
+
+--
+-- Name: TABLE refresh_tokens; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.refresh_tokens IS 'Auth: Store of tokens used to refresh JWT tokens once they expire.';
+
+
+--
+-- Name: refresh_tokens_id_seq; Type: SEQUENCE; Schema: auth; Owner: -
+--
+
+CREATE SEQUENCE auth.refresh_tokens_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: refresh_tokens_id_seq; Type: SEQUENCE OWNED BY; Schema: auth; Owner: -
+--
+
+ALTER SEQUENCE auth.refresh_tokens_id_seq OWNED BY auth.refresh_tokens.id;
+
+
+--
+-- Name: saml_providers; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.saml_providers (
+    id uuid NOT NULL,
+    sso_provider_id uuid NOT NULL,
+    entity_id text NOT NULL,
+    metadata_xml text NOT NULL,
+    metadata_url text,
+    attribute_mapping jsonb,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    name_id_format text,
+    CONSTRAINT "entity_id not empty" CHECK ((char_length(entity_id) > 0)),
+    CONSTRAINT "metadata_url not empty" CHECK (((metadata_url = NULL::text) OR (char_length(metadata_url) > 0))),
+    CONSTRAINT "metadata_xml not empty" CHECK ((char_length(metadata_xml) > 0))
+);
+
+
+--
+-- Name: TABLE saml_providers; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.saml_providers IS 'Auth: Manages SAML Identity Provider connections.';
+
+
+--
+-- Name: saml_relay_states; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.saml_relay_states (
+    id uuid NOT NULL,
+    sso_provider_id uuid NOT NULL,
+    request_id text NOT NULL,
+    for_email text,
+    redirect_to text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    flow_state_id uuid,
+    CONSTRAINT "request_id not empty" CHECK ((char_length(request_id) > 0))
+);
+
+
+--
+-- Name: TABLE saml_relay_states; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.saml_relay_states IS 'Auth: Contains SAML Relay State information for each Service Provider initiated login.';
+
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.schema_migrations (
+    version character varying(255) NOT NULL
+);
+
+
+--
+-- Name: TABLE schema_migrations; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.schema_migrations IS 'Auth: Manages updates to the auth system.';
+
+
+--
+-- Name: sessions; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.sessions (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    factor_id uuid,
+    aal auth.aal_level,
+    not_after timestamp with time zone,
+    refreshed_at timestamp without time zone,
+    user_agent text,
+    ip inet,
+    tag text
+);
+
+
+--
+-- Name: TABLE sessions; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.sessions IS 'Auth: Stores session data associated to a user.';
+
+
+--
+-- Name: COLUMN sessions.not_after; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.sessions.not_after IS 'Auth: Not after is a nullable column that contains a timestamp after which the session should be regarded as expired.';
+
+
+--
+-- Name: sso_domains; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.sso_domains (
+    id uuid NOT NULL,
+    sso_provider_id uuid NOT NULL,
+    domain text NOT NULL,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    CONSTRAINT "domain not empty" CHECK ((char_length(domain) > 0))
+);
+
+
+--
+-- Name: TABLE sso_domains; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.sso_domains IS 'Auth: Manages SSO email address domain mapping to an SSO Identity Provider.';
+
+
+--
+-- Name: sso_providers; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.sso_providers (
+    id uuid NOT NULL,
+    resource_id text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    CONSTRAINT "resource_id not empty" CHECK (((resource_id = NULL::text) OR (char_length(resource_id) > 0)))
+);
+
+
+--
+-- Name: TABLE sso_providers; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.sso_providers IS 'Auth: Manages SSO identity provider information; see saml_providers for SAML.';
+
+
+--
+-- Name: COLUMN sso_providers.resource_id; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.sso_providers.resource_id IS 'Auth: Uniquely identifies a SSO provider according to a user-chosen resource ID (case insensitive), useful in infrastructure as code.';
+
+
+--
+-- Name: users; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.users (
+    instance_id uuid,
+    id uuid NOT NULL,
+    aud character varying(255),
+    role character varying(255),
+    email character varying(255),
+    encrypted_password character varying(255),
+    email_confirmed_at timestamp with time zone,
+    invited_at timestamp with time zone,
+    confirmation_token character varying(255),
+    confirmation_sent_at timestamp with time zone,
+    recovery_token character varying(255),
+    recovery_sent_at timestamp with time zone,
+    email_change_token_new character varying(255),
+    email_change character varying(255),
+    email_change_sent_at timestamp with time zone,
+    last_sign_in_at timestamp with time zone,
+    raw_app_meta_data jsonb,
+    raw_user_meta_data jsonb,
+    is_super_admin boolean,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    phone text DEFAULT NULL::character varying,
+    phone_confirmed_at timestamp with time zone,
+    phone_change text DEFAULT ''::character varying,
+    phone_change_token character varying(255) DEFAULT ''::character varying,
+    phone_change_sent_at timestamp with time zone,
+    confirmed_at timestamp with time zone GENERATED ALWAYS AS (LEAST(email_confirmed_at, phone_confirmed_at)) STORED,
+    email_change_token_current character varying(255) DEFAULT ''::character varying,
+    email_change_confirm_status smallint DEFAULT 0,
+    banned_until timestamp with time zone,
+    reauthentication_token character varying(255) DEFAULT ''::character varying,
+    reauthentication_sent_at timestamp with time zone,
+    is_sso_user boolean DEFAULT false NOT NULL,
+    deleted_at timestamp with time zone,
+    is_anonymous boolean DEFAULT false NOT NULL,
+    CONSTRAINT users_email_change_confirm_status_check CHECK (((email_change_confirm_status >= 0) AND (email_change_confirm_status <= 2)))
+);
+
+
+--
+-- Name: TABLE users; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.users IS 'Auth: Stores user login data within a secure schema.';
+
+
+--
+-- Name: COLUMN users.is_sso_user; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.users.is_sso_user IS 'Auth: Set this column to true when the account comes from SSO. These accounts can have duplicate emails.';
+
 
 --
 -- Name: pos_mini_modular3_admin_sessions; Type: TABLE; Schema: public; Owner: -
@@ -4999,296 +4175,6 @@ COMMENT ON COLUMN public.pos_mini_modular3_businesses.usage_stats IS 'JSON objec
 
 
 --
--- Name: pos_mini_modular3_product_categories; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pos_mini_modular3_product_categories (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    business_id uuid NOT NULL,
-    parent_id uuid,
-    name text NOT NULL,
-    description text,
-    display_order integer DEFAULT 0,
-    color_code text,
-    icon_name text,
-    image_url text,
-    is_active boolean DEFAULT true,
-    is_featured boolean DEFAULT false,
-    slug text,
-    meta_title text,
-    meta_description text,
-    settings jsonb DEFAULT '{}'::jsonb,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    created_by uuid,
-    updated_by uuid,
-    CONSTRAINT pos_mini_modular3_product_categories_color_code_check CHECK (((color_code ~ '^#[0-9A-Fa-f]{6}$'::text) OR (color_code IS NULL))),
-    CONSTRAINT pos_mini_modular3_product_categories_description_check CHECK ((length(description) <= 500)),
-    CONSTRAINT pos_mini_modular3_product_categories_icon_name_check CHECK ((length(icon_name) <= 50)),
-    CONSTRAINT pos_mini_modular3_product_categories_meta_description_check CHECK ((length(meta_description) <= 320)),
-    CONSTRAINT pos_mini_modular3_product_categories_meta_title_check CHECK ((length(meta_title) <= 160)),
-    CONSTRAINT pos_mini_modular3_product_categories_name_check CHECK (((length(name) >= 1) AND (length(name) <= 100))),
-    CONSTRAINT valid_parent_hierarchy CHECK ((parent_id <> id))
-);
-
-
---
--- Name: TABLE pos_mini_modular3_product_categories; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.pos_mini_modular3_product_categories IS 'Product categories with hierarchical support and business isolation';
-
-
---
--- Name: COLUMN pos_mini_modular3_product_categories.parent_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_product_categories.parent_id IS 'Self-reference for hierarchical categories';
-
-
---
--- Name: COLUMN pos_mini_modular3_product_categories.color_code; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_product_categories.color_code IS 'Hex color code for UI theming';
-
-
---
--- Name: COLUMN pos_mini_modular3_product_categories.slug; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_product_categories.slug IS 'URL-friendly identifier for web/API';
-
-
---
--- Name: COLUMN pos_mini_modular3_product_categories.settings; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_product_categories.settings IS 'Category-specific settings in JSON format';
-
-
---
--- Name: pos_mini_modular3_product_images; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pos_mini_modular3_product_images (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    product_id uuid,
-    variant_id uuid,
-    business_id uuid NOT NULL,
-    url text NOT NULL,
-    filename text,
-    original_filename text,
-    alt_text text,
-    size_bytes integer,
-    width integer,
-    height integer,
-    format text,
-    is_primary boolean DEFAULT false,
-    display_order integer DEFAULT 0,
-    is_active boolean DEFAULT true,
-    created_at timestamp with time zone DEFAULT now(),
-    uploaded_by uuid,
-    CONSTRAINT pos_mini_modular3_product_images_alt_text_check CHECK ((length(alt_text) <= 200)),
-    CONSTRAINT pos_mini_modular3_product_images_check CHECK ((((product_id IS NOT NULL) AND (variant_id IS NULL)) OR ((product_id IS NULL) AND (variant_id IS NOT NULL)))),
-    CONSTRAINT pos_mini_modular3_product_images_format_check CHECK ((format = ANY (ARRAY['jpg'::text, 'jpeg'::text, 'png'::text, 'webp'::text, 'gif'::text]))),
-    CONSTRAINT pos_mini_modular3_product_images_height_check CHECK ((height > 0)),
-    CONSTRAINT pos_mini_modular3_product_images_size_bytes_check CHECK ((size_bytes > 0)),
-    CONSTRAINT pos_mini_modular3_product_images_width_check CHECK ((width > 0))
-);
-
-
---
--- Name: TABLE pos_mini_modular3_product_images; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.pos_mini_modular3_product_images IS 'Product and variant images with metadata';
-
-
---
--- Name: pos_mini_modular3_product_variants; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pos_mini_modular3_product_variants (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    product_id uuid NOT NULL,
-    business_id uuid NOT NULL,
-    name text NOT NULL,
-    sku text,
-    barcode text,
-    attributes jsonb DEFAULT '{}'::jsonb NOT NULL,
-    unit_price numeric(15,2),
-    cost_price numeric(15,2),
-    sale_price numeric(15,2),
-    current_stock integer DEFAULT 0,
-    min_stock_level integer DEFAULT 0,
-    reorder_point integer DEFAULT 0,
-    weight numeric(10,3),
-    dimensions jsonb,
-    image_url text,
-    is_active boolean DEFAULT true,
-    display_order integer DEFAULT 0,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT pos_mini_modular3_product_variants_barcode_check CHECK ((length(barcode) <= 100)),
-    CONSTRAINT pos_mini_modular3_product_variants_cost_price_check CHECK ((cost_price >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_product_variants_current_stock_check CHECK ((current_stock >= 0)),
-    CONSTRAINT pos_mini_modular3_product_variants_min_stock_level_check CHECK ((min_stock_level >= 0)),
-    CONSTRAINT pos_mini_modular3_product_variants_name_check CHECK (((length(name) >= 1) AND (length(name) <= 200))),
-    CONSTRAINT pos_mini_modular3_product_variants_reorder_point_check CHECK ((reorder_point >= 0)),
-    CONSTRAINT pos_mini_modular3_product_variants_sale_price_check CHECK ((sale_price >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_product_variants_sku_check CHECK ((length(sku) <= 50)),
-    CONSTRAINT pos_mini_modular3_product_variants_unit_price_check CHECK ((unit_price >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_product_variants_weight_check CHECK ((weight >= (0)::numeric))
-);
-
-
---
--- Name: TABLE pos_mini_modular3_product_variants; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.pos_mini_modular3_product_variants IS 'Product variants for products with multiple options (size, color, etc.)';
-
-
---
--- Name: COLUMN pos_mini_modular3_product_variants.attributes; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_product_variants.attributes IS 'Variant attributes like {"size": "M", "color": "Red"}';
-
-
---
--- Name: pos_mini_modular3_products; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pos_mini_modular3_products (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    business_id uuid NOT NULL,
-    category_id uuid,
-    name text NOT NULL,
-    description text,
-    short_description text,
-    sku text,
-    barcode text,
-    internal_code text,
-    unit_price numeric(15,2) DEFAULT 0,
-    cost_price numeric(15,2) DEFAULT 0,
-    sale_price numeric(15,2),
-    min_price numeric(15,2) DEFAULT 0,
-    max_discount_percent numeric(5,2) DEFAULT 0,
-    current_stock integer DEFAULT 0,
-    min_stock_level integer DEFAULT 0,
-    max_stock_level integer,
-    reorder_point integer DEFAULT 0,
-    unit_of_measure text DEFAULT 'piece'::text,
-    weight numeric(10,3),
-    weight_unit text DEFAULT 'kg'::text,
-    dimensions jsonb,
-    brand text,
-    manufacturer text,
-    origin_country text,
-    tax_rate numeric(5,2) DEFAULT 0,
-    tax_category text DEFAULT 'standard'::text,
-    is_active boolean DEFAULT true,
-    is_featured boolean DEFAULT false,
-    is_digital boolean DEFAULT false,
-    has_variants boolean DEFAULT false,
-    track_stock boolean DEFAULT true,
-    allow_backorder boolean DEFAULT false,
-    tags text[],
-    display_order integer DEFAULT 0,
-    slug text,
-    meta_title text,
-    meta_description text,
-    images jsonb DEFAULT '[]'::jsonb,
-    primary_image text,
-    specifications jsonb DEFAULT '{}'::jsonb,
-    attributes jsonb DEFAULT '{}'::jsonb,
-    settings jsonb DEFAULT '{}'::jsonb,
-    view_count integer DEFAULT 0,
-    sale_count integer DEFAULT 0,
-    last_sold_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    created_by uuid,
-    updated_by uuid,
-    CONSTRAINT pos_mini_modular3_products_barcode_check CHECK ((length(barcode) <= 100)),
-    CONSTRAINT pos_mini_modular3_products_brand_check CHECK ((length(brand) <= 100)),
-    CONSTRAINT pos_mini_modular3_products_check CHECK ((max_stock_level >= min_stock_level)),
-    CONSTRAINT pos_mini_modular3_products_cost_price_check CHECK ((cost_price >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_products_current_stock_check CHECK ((current_stock >= 0)),
-    CONSTRAINT pos_mini_modular3_products_description_check CHECK ((length(description) <= 2000)),
-    CONSTRAINT pos_mini_modular3_products_internal_code_check CHECK ((length(internal_code) <= 50)),
-    CONSTRAINT pos_mini_modular3_products_manufacturer_check CHECK ((length(manufacturer) <= 100)),
-    CONSTRAINT pos_mini_modular3_products_max_discount_percent_check CHECK (((max_discount_percent >= (0)::numeric) AND (max_discount_percent <= (100)::numeric))),
-    CONSTRAINT pos_mini_modular3_products_meta_description_check CHECK ((length(meta_description) <= 320)),
-    CONSTRAINT pos_mini_modular3_products_meta_title_check CHECK ((length(meta_title) <= 160)),
-    CONSTRAINT pos_mini_modular3_products_min_price_check CHECK ((min_price >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_products_min_stock_level_check CHECK ((min_stock_level >= 0)),
-    CONSTRAINT pos_mini_modular3_products_name_check CHECK (((length(name) >= 1) AND (length(name) <= 200))),
-    CONSTRAINT pos_mini_modular3_products_origin_country_check CHECK ((length(origin_country) <= 50)),
-    CONSTRAINT pos_mini_modular3_products_reorder_point_check CHECK ((reorder_point >= 0)),
-    CONSTRAINT pos_mini_modular3_products_sale_price_check CHECK ((sale_price >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_products_short_description_check CHECK ((length(short_description) <= 500)),
-    CONSTRAINT pos_mini_modular3_products_sku_check CHECK ((length(sku) <= 50)),
-    CONSTRAINT pos_mini_modular3_products_tax_rate_check CHECK (((tax_rate >= (0)::numeric) AND (tax_rate <= (100)::numeric))),
-    CONSTRAINT pos_mini_modular3_products_unit_of_measure_check CHECK ((length(unit_of_measure) <= 20)),
-    CONSTRAINT pos_mini_modular3_products_unit_price_check CHECK ((unit_price >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_products_weight_check CHECK ((weight >= (0)::numeric)),
-    CONSTRAINT pos_mini_modular3_products_weight_unit_check CHECK ((weight_unit = ANY (ARRAY['g'::text, 'kg'::text, 'lb'::text, 'oz'::text])))
-);
-
-
---
--- Name: TABLE pos_mini_modular3_products; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.pos_mini_modular3_products IS 'Main products table with comprehensive inventory and pricing management';
-
-
---
--- Name: COLUMN pos_mini_modular3_products.sku; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_products.sku IS 'Stock Keeping Unit - unique within business';
-
-
---
--- Name: COLUMN pos_mini_modular3_products.dimensions; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_products.dimensions IS 'Product dimensions: {length, width, height, unit}';
-
-
---
--- Name: COLUMN pos_mini_modular3_products.track_stock; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_products.track_stock IS 'Whether to track inventory for this product';
-
-
---
--- Name: COLUMN pos_mini_modular3_products.tags; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_products.tags IS 'Array of text tags for filtering and search';
-
-
---
--- Name: COLUMN pos_mini_modular3_products.specifications; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_products.specifications IS 'Technical specifications in JSON format';
-
-
---
--- Name: COLUMN pos_mini_modular3_products.attributes; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.pos_mini_modular3_products.attributes IS 'Custom product attributes';
-
-
---
 -- Name: pos_mini_modular3_restore_history; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5497,267 +4383,186 @@ CREATE VIEW public.pos_mini_modular3_super_admin_stats AS
 
 
 --
--- Data for Name: pos_mini_modular3_admin_sessions; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: refresh_tokens id; Type: DEFAULT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_admin_sessions (id, super_admin_id, target_business_id, impersonated_role, session_reason, session_start, session_end, is_active, created_at) FROM stdin;
-\.
-
-
---
--- Data for Name: pos_mini_modular3_backup_downloads; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.pos_mini_modular3_backup_downloads (id, backup_id, downloaded_at, downloaded_by, ip_address, user_agent) FROM stdin;
-\.
+ALTER TABLE ONLY auth.refresh_tokens ALTER COLUMN id SET DEFAULT nextval('auth.refresh_tokens_id_seq'::regclass);
 
 
 --
--- Data for Name: pos_mini_modular3_backup_metadata; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: mfa_amr_claims amr_id_pk; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_backup_metadata (id, filename, type, size, checksum, created_at, version, tables, compressed, encrypted, storage_path, retention_until, status, error_message, created_by) FROM stdin;
-1ep6obol1h1mco943i0	pos-mini-data-2025-07-04-03-24-54-1ep6obol.sql.gz.enc	data	6984	e2f3e30cfb0548453783adff2c8385c314bc210f9af4189ac2d3e5e7fd4dc42f	2025-07-04 03:24:54.072+00	Unknown	["pos_mini_modular3_backup_downloads", "pos_mini_modular3_backup_metadata", "pos_mini_modular3_backup_notifications", "pos_mini_modular3_backup_schedules", "pos_mini_modular3_business_invitations", "pos_mini_modular3_business_types", "pos_mini_modular3_businesses", "pos_mini_modular3_restore_history", "pos_mini_modular3_restore_points", "pos_mini_modular3_subscription_history", "pos_mini_modular3_subscription_plans", "pos_mini_modular3_user_profiles"]	t	t	pos-mini-data-2025-07-04-03-24-54-1ep6obol.sql.gz.enc	2025-08-03 03:24:55.997+00	completed	\N	system
-15v2kx2zp3ymcoxduiq	pos-mini-data-2025-07-04-14-44-19-15v2kx2z.sql.gz.enc	data	7860	2f34b42804472f1aa370c281e8004f9b64283ca4a3feab15dc5ced6dd52ef654	2025-07-04 14:44:19.778+00	Unknown	["pos_mini_modular3_backup_downloads", "pos_mini_modular3_backup_metadata", "pos_mini_modular3_backup_notifications", "pos_mini_modular3_backup_schedules", "pos_mini_modular3_business_invitations", "pos_mini_modular3_business_types", "pos_mini_modular3_businesses", "pos_mini_modular3_restore_history", "pos_mini_modular3_restore_points", "pos_mini_modular3_subscription_history", "pos_mini_modular3_subscription_plans", "pos_mini_modular3_user_profiles"]	t	t	pos-mini-data-2025-07-04-14-44-19-15v2kx2z.sql.gz.enc	2025-08-03 14:44:21.28+00	completed	\N	system
-0akl4fn6laafmcotdaeb	pos-mini-data-2025-07-04-12-51-55-0akl4fn6.sql.gz.enc	data	7299	892d2e05d1968b295633d099c0a91b92d343ddc1f742c46dedf4286820bc0402	2025-07-04 12:51:55.235+00	Unknown	["pos_mini_modular3_backup_downloads", "pos_mini_modular3_backup_metadata", "pos_mini_modular3_backup_notifications", "pos_mini_modular3_backup_schedules", "pos_mini_modular3_business_invitations", "pos_mini_modular3_business_types", "pos_mini_modular3_businesses", "pos_mini_modular3_restore_history", "pos_mini_modular3_restore_points", "pos_mini_modular3_subscription_history", "pos_mini_modular3_subscription_plans", "pos_mini_modular3_user_profiles"]	t	t	pos-mini-data-2025-07-04-12-51-55-0akl4fn6.sql.gz.enc	2025-08-03 12:51:57.487+00	completed	\N	system
-aiaawarjb1mco62qfu	pos-mini-data-2025-07-04-01-59-51-aiaawarj.sql.gz.enc	data	6612	34992f4a7ce8e0bddf4d7791a4d61c6b9b8bcb19d0b5c8348719cac6c3dea508	2025-07-04 01:59:51.642+00	Unknown	["pos_mini_modular3_backup_downloads", "pos_mini_modular3_backup_metadata", "pos_mini_modular3_backup_notifications", "pos_mini_modular3_backup_schedules", "pos_mini_modular3_business_invitations", "pos_mini_modular3_business_types", "pos_mini_modular3_businesses", "pos_mini_modular3_restore_history", "pos_mini_modular3_restore_points", "pos_mini_modular3_subscription_history", "pos_mini_modular3_subscription_plans", "pos_mini_modular3_user_profiles"]	t	t	pos-mini-data-2025-07-04-01-59-51-aiaawarj.sql.gz.enc	2025-08-03 01:59:53.308+00	completed	\N	system
-qsw626zysbpmco5tkrn	pos-mini-data-2025-07-04-01-52-44-qsw626zy.sql.gz.enc	data	6199	9d87b9fe7f1f73a0ed69962e927d5209c7e0b0792cfdcdf030672d11c0be4423	2025-07-04 01:52:44.387+00	Unknown	["pos_mini_modular3_backup_downloads", "pos_mini_modular3_backup_metadata", "pos_mini_modular3_backup_notifications", "pos_mini_modular3_backup_schedules", "pos_mini_modular3_business_invitations", "pos_mini_modular3_business_types", "pos_mini_modular3_businesses", "pos_mini_modular3_restore_history", "pos_mini_modular3_restore_points", "pos_mini_modular3_subscription_history", "pos_mini_modular3_subscription_plans", "pos_mini_modular3_user_profiles"]	t	t	pos-mini-data-2025-07-04-01-52-44-qsw626zy.sql.gz.enc	2025-08-03 01:52:45.827+00	completed	\N	system
-n7tjq9mkd3mcpg7cxv	pos-mini-full-2025-07-04-23-31-09-n7tjq9mk.sql.gz.enc	full	8630	66770dde62b33761d44fa50dc7d2c6f52a5315f69b91c2de02d34d6103910bb7	2025-07-04 23:31:09.763+00	Unknown	["pos_mini_modular3_backup_downloads", "pos_mini_modular3_backup_metadata", "pos_mini_modular3_backup_notifications", "pos_mini_modular3_backup_schedules", "pos_mini_modular3_business_invitations", "pos_mini_modular3_business_types", "pos_mini_modular3_businesses", "pos_mini_modular3_restore_history", "pos_mini_modular3_restore_points", "pos_mini_modular3_subscription_history", "pos_mini_modular3_subscription_plans", "pos_mini_modular3_user_profiles"]	t	t	pos-mini-full-2025-07-04-23-31-09-n7tjq9mk.sql.gz.enc	2025-08-03 23:31:12.213+00	completed	\N	system
-aey5miijilmcq8vofz	pos-mini-full-2025-07-05-12-53-53-aey5miij.sql.gz.enc	full	8598	d703319c969a7e115ddf6359bb3bcaca56272e2d5846c90916bedbdc0f5ac2ee	2025-07-05 12:53:53.663+00	Unknown	["pos_mini_modular3_backup_downloads", "pos_mini_modular3_backup_metadata", "pos_mini_modular3_backup_notifications", "pos_mini_modular3_backup_schedules", "pos_mini_modular3_business_invitations", "pos_mini_modular3_business_types", "pos_mini_modular3_businesses", "pos_mini_modular3_restore_history", "pos_mini_modular3_restore_points", "pos_mini_modular3_subscription_history", "pos_mini_modular3_subscription_plans", "pos_mini_modular3_user_profiles"]	t	t	pos-mini-full-2025-07-05-12-53-53-aey5miij.sql.gz.enc	2025-08-04 12:53:55.926+00	completed	\N	system
-\.
+ALTER TABLE ONLY auth.mfa_amr_claims
+    ADD CONSTRAINT amr_id_pk PRIMARY KEY (id);
 
 
 --
--- Data for Name: pos_mini_modular3_backup_notifications; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: audit_log_entries audit_log_entries_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_backup_notifications (id, type, title, message, backup_id, schedule_id, read, created_at, details) FROM stdin;
-\.
-
-
---
--- Data for Name: pos_mini_modular3_backup_schedules; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.pos_mini_modular3_backup_schedules (id, name, backup_type, cron_expression, enabled, compression, encryption, retention_days, last_run_at, next_run_at, failure_count, last_error, created_by, created_at, updated_at) FROM stdin;
-8bad2bc1-a479-48c1-a58c-6424e34e58ea	Daily Incremental Backup	incremental	0 2 * * *	t	gzip	t	30	\N	2025-07-04 15:50:02.923339+00	0	\N	system	2025-07-03 15:50:02.923339+00	2025-07-04 22:53:45.51178+00
-f46e39c3-5a40-48f7-984a-27cd5704fb09	Weekly Full Backup	full	0 3 * * 0	t	gzip	t	90	\N	2025-07-10 15:50:02.923339+00	0	\N	system	2025-07-03 15:50:02.923339+00	2025-07-04 22:53:45.51178+00
-\.
+ALTER TABLE ONLY auth.audit_log_entries
+    ADD CONSTRAINT audit_log_entries_pkey PRIMARY KEY (id);
 
 
 --
--- Data for Name: pos_mini_modular3_business_invitations; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: flow_state flow_state_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_business_invitations (id, business_id, invited_by, email, role, invitation_token, status, expires_at, accepted_at, accepted_by, created_at) FROM stdin;
-\.
-
-
---
--- Data for Name: pos_mini_modular3_business_types; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.pos_mini_modular3_business_types (id, value, label, description, icon, category, is_active, sort_order, created_at, updated_at) FROM stdin;
-1dc28a52-de30-4c51-82e5-2c54a33fbb5c	retail	🏪 Bán lẻ	Cửa hàng bán lẻ, siêu thị mini, tạp hóa	🏪	retail	t	10	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-380698d9-442e-4ead-a777-46b638ea641f	wholesale	📦 Bán sỉ	Bán sỉ, phân phối hàng hóa	📦	retail	t	20	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-b48d76f0-b535-466c-861b-b6304ed28d80	fashion	👗 Thời trang	Quần áo, giày dép, phụ kiện thời trang	👗	retail	t	30	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-abe66183-1d93-453f-8ddf-bf3961b9f254	electronics	📱 Điện tử	Điện thoại, máy tính, thiết bị điện tử	📱	retail	t	40	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-a09e0ef4-68cd-4306-aaaa-e3894bf34ac4	restaurant	🍽️ Nhà hàng	Nhà hàng, quán ăn, fast food	🍽️	food	t	110	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-0a631496-d43b-4593-9997-11a76457c1d1	cafe	☕ Quán cà phê	Cà phê, trà sữa, đồ uống	☕	food	t	120	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-7f6a0248-48d4-42bf-b69d-b06ae8a78d08	food_service	🍱 Dịch vụ ăn uống	Catering, giao đồ ăn, suất ăn công nghiệp	🍱	food	t	130	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-24cfb1e4-3243-4f2b-a49d-ec775b4644e6	beauty	💄 Làm đẹp	Mỹ phẩm, làm đẹp, chăm sóc da	💄	beauty	t	210	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-0ae5962c-a16d-4e07-860b-9ea13d174576	spa	🧖‍♀️ Spa	Spa, massage, thư giãn	🧖‍♀️	beauty	t	220	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-88b16cdc-3c76-4633-888d-748b08a40c48	salon	💇‍♀️ Salon	Cắt tóc, tạo kiểu, làm nail	💇‍♀️	beauty	t	230	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-929559c9-d7a0-4292-a9f4-6aff2b8e8539	healthcare	🏥 Y tế	Dịch vụ y tế, chăm sóc sức khỏe	🏥	healthcare	t	310	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-768b62b6-6b1c-4665-8296-1a0f9b7512bf	pharmacy	💊 Nhà thuốc	Hiệu thuốc, dược phẩm	💊	healthcare	t	320	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-28066e50-889c-4181-b303-d77d598c5dbc	clinic	🩺 Phòng khám	Phòng khám tư, chuyên khoa	🩺	healthcare	t	330	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-01f7f102-d0b5-4dce-98e5-26343f19f182	education	🎓 Giáo dục	Trung tâm dạy học, đào tạo	🎓	professional	t	410	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-7ac90817-0d1b-4a18-8857-5cba2ef63e9c	consulting	💼 Tư vấn	Dịch vụ tư vấn, chuyên môn	💼	professional	t	420	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-0785cb7a-689a-4591-94c0-6eba1261db0f	finance	💰 Tài chính	Dịch vụ tài chính, bảo hiểm	💰	professional	t	430	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-34bfe785-4294-4890-bbf6-038acb095710	real_estate	🏘️ Bất động sản	Môi giới, tư vấn bất động sản	🏘️	professional	t	440	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-0dbcca8f-9ce3-47ed-9297-c3a2b785451e	automotive	🚗 Ô tô	Sửa chữa, bảo dưỡng ô tô, xe máy	🚗	technical	t	510	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-a68d37f4-a91f-4247-9e2f-e05e1a6331ed	repair	🔧 Sửa chữa	Sửa chữa điện tử, đồ gia dụng	🔧	technical	t	520	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-0de2b85d-4410-4fb1-b00a-1a716c3be98a	cleaning	🧹 Vệ sinh	Dịch vụ vệ sinh, dọn dẹp	🧹	technical	t	530	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-cb7fd67f-1574-458d-ad38-c6df271d9adf	construction	🏗️ Xây dựng	Xây dựng, sửa chữa nhà cửa	🏗️	technical	t	540	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-7911c5f3-4be8-482b-a6b7-d0fcf55bf650	travel	✈️ Du lịch	Tour du lịch, dịch vụ lữ hành	✈️	entertainment	t	610	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-2c14d3ba-8afb-4651-b1d6-514060332e39	hotel	🏨 Khách sạn	Khách sạn, nhà nghỉ, homestay	🏨	entertainment	t	620	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-7ac93735-73a9-4517-8d80-d2d6b45e735a	entertainment	🎉 Giải trí	Karaoke, game, sự kiện	🎉	entertainment	t	630	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-50787e95-4a31-4c94-bd22-1224cee4a8be	sports	⚽ Thể thao	Sân thể thao, dụng cụ thể thao	⚽	entertainment	t	640	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-103b4ac9-dd72-4d7a-93d8-1b62ac03f6e5	agriculture	🌾 Nông nghiệp	Nông sản, thủy sản, chăn nuôi	🌾	industrial	t	710	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-546c8520-8b18-4795-aa94-02612bdab76c	manufacturing	🏭 Sản xuất	Sản xuất, gia công, chế biến	🏭	industrial	t	720	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-1dfd7419-5dd5-47d4-9daa-0841a597f47b	logistics	🚚 Logistics	Vận chuyển, kho bãi, logistics	🚚	industrial	t	730	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-181ca2e0-58b7-4002-8f1b-6bdbe9442f47	service	🔧 Dịch vụ	Dịch vụ tổng hợp khác	🔧	service	t	910	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-6eef9c17-98df-445c-88c3-3153a7970ac4	other	🏢 Khác	Các loại hình kinh doanh khác	🏢	other	t	999	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-8b66bec4-57ff-40a5-9210-ab7e5ceb0a73	gym	💪 Gym & Thể thao	Phòng gym, yoga, thể dục thể thao	💪	sports	t	240	2025-07-03 10:59:01.990231+00	2025-07-04 22:53:46.113917+00
-\.
+ALTER TABLE ONLY auth.flow_state
+    ADD CONSTRAINT flow_state_pkey PRIMARY KEY (id);
 
 
 --
--- Data for Name: pos_mini_modular3_businesses; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: identities identities_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_businesses (id, name, code, business_type, phone, email, address, tax_code, legal_representative, logo_url, status, settings, subscription_tier, subscription_status, subscription_starts_at, subscription_ends_at, trial_ends_at, max_users, max_products, created_at, updated_at, features_enabled, usage_stats, last_billing_date, next_billing_date) FROM stdin;
-61473fc9-16b2-45b8-87f0-45e0dc8612ef	An Nhiên Farm	BIZ1751366425	cafe	\N	\N	D2/062A, Nam Son, Quang Trung, Thong Nhat	3604005775	\N	\N	trial	{}	free	trial	2025-07-01 10:40:25.745418+00	\N	2025-07-31 10:40:25.745418+00	5	50	2025-07-01 10:40:25.745418+00	2025-07-04 22:53:46.665466+00	{}	{}	\N	\N
-dda92815-c1f0-4597-8c05-47ec1eb50873	Của Hàng Rau Sạch Phi Yến	BIZ1751371309	retail	\N	\N	145 Cạnh Sacombank Gia Yên	987654456	\N	\N	trial	{}	free	trial	2025-07-01 12:01:49.27648+00	\N	2025-07-31 12:01:49.27648+00	5	50	2025-07-01 12:01:49.27648+00	2025-07-04 22:53:46.665466+00	{}	{}	\N	\N
-e997773b-8876-4837-aa80-c2f82cf07f83	Chao Lòng Viên Minh Châu	SAFE202507026623	service	\N	\N	\N	\N	\N	\N	active	{}	free	trial	2025-07-02 18:55:36.167643+00	2025-08-01 18:55:36.167643+00	2025-08-01 18:55:36.167643+00	3	100	2025-07-02 18:55:36.167643+00	2025-07-04 22:53:46.665466+00	{}	{}	\N	\N
-c182f174-6372-4b34-964d-765fdc6dabbd	Lẩu Cua Đồng Thanh Sơn	BIZ202507039693	fashion	\N	\N	\N	\N	\N	\N	active	{}	premium	active	2025-07-03 13:38:21.323452+00	\N	\N	50	5000	2025-07-03 13:38:21.323452+00	2025-07-04 22:53:46.665466+00	{}	{}	\N	\N
-7a2a2404-8498-4396-bd2b-e6745591652b	Test Direct RPC Business 2333	BIZ202507036302	retail	\N	\N	\N	\N	\N	\N	active	{}	free	trial	2025-07-03 13:28:51.487484+00	2025-08-02 13:28:51.487484+00	2025-08-02 13:28:51.487484+00	3	50	2025-07-03 13:28:51.487484+00	2025-07-04 22:53:46.665466+00	{}	{}	\N	\N
-37c75836-edb9-4dc2-8bbe-83ad87ba274e	Gas Tân Yên 563 business 	BIZ202507032595	construction	\N	\N	\N	\N	\N	\N	active	{}	basic	active	2025-07-03 13:39:20.303084+00	\N	\N	10	500	2025-07-03 13:39:20.303084+00	2025-07-04 22:53:46.665466+00	{}	{}	\N	\N
-1f0290fe-3ed1-440b-9a0b-68885aaba9f8	Test Direct RPC trucchi	BIZ202507032202	fashion	\N	\N	\N	\N	\N	\N	active	{}	free	trial	2025-07-03 13:28:51.257721+00	2025-08-02 13:28:51.257721+00	2025-08-02 13:28:51.257721+00	3	50	2025-07-03 13:28:51.257721+00	2025-07-04 22:53:46.665466+00	{}	{}	\N	\N
-97da7e62-0409-4882-b80c-2c75b60cb0da	Bida Thiên Long 3\n	BIZ000001	retail	\N	\N	\N	\N	\N	\N	trial	{}	free	trial	2025-06-30 22:38:05.559244+00	\N	2025-07-30 22:38:05.559244+00	3	50	2025-06-30 22:38:05.559244+00	2025-07-04 23:33:51.772724+00	{}	{}	\N	\N
-\.
+ALTER TABLE ONLY auth.identities
+    ADD CONSTRAINT identities_pkey PRIMARY KEY (id);
 
 
 --
--- Data for Name: pos_mini_modular3_product_categories; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: identities identities_provider_id_provider_unique; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_product_categories (id, business_id, parent_id, name, description, display_order, color_code, icon_name, image_url, is_active, is_featured, slug, meta_title, meta_description, settings, created_at, updated_at, created_by, updated_by) FROM stdin;
-bdcdf79e-8122-4030-9d9d-0844b6f7d8d6	61473fc9-16b2-45b8-87f0-45e0dc8612ef	\N	test-category-1751844179009	Test category for migration verification	0	\N	\N	\N	t	f	testcategory1751844179009	\N	\N	{}	2025-07-06 23:22:58.954508+00	2025-07-06 23:22:58.954508+00	5f8d74cf-572a-4640-a565-34c5e1462f4e	5f8d74cf-572a-4640-a565-34c5e1462f4e
-3471e860-c2b3-4370-8cd4-338ee6a64a4f	61473fc9-16b2-45b8-87f0-45e0dc8612ef	\N	test-category-1751844591889	Test category for migration verification	0	\N	\N	\N	t	f	testcategory1751844591889	\N	\N	{}	2025-07-06 23:29:51.78536+00	2025-07-06 23:29:51.78536+00	5f8d74cf-572a-4640-a565-34c5e1462f4e	5f8d74cf-572a-4640-a565-34c5e1462f4e
-3d0c2b0f-be55-4eb9-a6d9-266557347ba9	61473fc9-16b2-45b8-87f0-45e0dc8612ef	\N	test-category-1751845371372	Test category for migration verification	0	\N	\N	\N	t	f	testcategory1751845371372	\N	\N	{}	2025-07-06 23:42:51.285252+00	2025-07-06 23:42:51.285252+00	5f8d74cf-572a-4640-a565-34c5e1462f4e	5f8d74cf-572a-4640-a565-34c5e1462f4e
-\.
+ALTER TABLE ONLY auth.identities
+    ADD CONSTRAINT identities_provider_id_provider_unique UNIQUE (provider_id, provider);
 
 
 --
--- Data for Name: pos_mini_modular3_product_images; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: instances instances_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_product_images (id, product_id, variant_id, business_id, url, filename, original_filename, alt_text, size_bytes, width, height, format, is_primary, display_order, is_active, created_at, uploaded_by) FROM stdin;
-\.
-
-
---
--- Data for Name: pos_mini_modular3_product_variants; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.pos_mini_modular3_product_variants (id, product_id, business_id, name, sku, barcode, attributes, unit_price, cost_price, sale_price, current_stock, min_stock_level, reorder_point, weight, dimensions, image_url, is_active, display_order, created_at, updated_at) FROM stdin;
-\.
+ALTER TABLE ONLY auth.instances
+    ADD CONSTRAINT instances_pkey PRIMARY KEY (id);
 
 
 --
--- Data for Name: pos_mini_modular3_products; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: mfa_amr_claims mfa_amr_claims_session_id_authentication_method_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_products (id, business_id, category_id, name, description, short_description, sku, barcode, internal_code, unit_price, cost_price, sale_price, min_price, max_discount_percent, current_stock, min_stock_level, max_stock_level, reorder_point, unit_of_measure, weight, weight_unit, dimensions, brand, manufacturer, origin_country, tax_rate, tax_category, is_active, is_featured, is_digital, has_variants, track_stock, allow_backorder, tags, display_order, slug, meta_title, meta_description, images, primary_image, specifications, attributes, settings, view_count, sale_count, last_sold_at, created_at, updated_at, created_by, updated_by) FROM stdin;
-\.
-
-
---
--- Data for Name: pos_mini_modular3_restore_history; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.pos_mini_modular3_restore_history (id, backup_id, restored_at, restored_by, restore_type, target_tables, success, error_message, duration_ms, rows_affected, restore_point_id) FROM stdin;
-d46ff2c8-cbdd-4efb-be2d-78deb40e3bd4	15v2kx2zp3ymcoxduiq	2025-07-04 14:47:20.054551+00	system	full	\N	t	\N	7255	6	\N
-cfee99fb-95fb-4ca6-9d30-7a9106328913	15v2kx2zp3ymcoxduiq	2025-07-04 14:48:36.178514+00	system	full	\N	t	\N	6775	6	\N
-ab2a481b-7ba2-4935-99c1-1d07b9ad26d9	15v2kx2zp3ymcoxduiq	2025-07-04 14:49:37.401882+00	system	full	\N	f	Failed statements: 3	7245	5	\N
-adee8e12-cb82-4c8c-920a-a9c5cc03229e	15v2kx2zp3ymcoxduiq	2025-07-04 14:51:22.076096+00	system	full	\N	f	Failed statements: 3	7055	5	\N
-7fc394ad-d094-4f1c-898a-7b8d767cabfd	15v2kx2zp3ymcoxduiq	2025-07-04 14:52:35.461462+00	system	full	\N	f	Failed statements: 3	7087	5	\N
-6503ffc7-c519-43c1-bdee-9a8723eb3c52	15v2kx2zp3ymcoxduiq	2025-07-04 14:57:14.550814+00	system	full	\N	f	Failed statements: 2	6613	6	\N
-80cd0207-c6b4-4672-8ff7-9e4ae16f491d	15v2kx2zp3ymcoxduiq	2025-07-04 14:59:19.804183+00	system	full	\N	f	Failed statements: 2	6518	6	\N
-c9e879e4-de28-46d9-8ede-a1a806ddfffc	0akl4fn6laafmcotdaeb	2025-07-04 13:02:28.416021+00	system	full	\N	t	\N	1612	5	\N
-3e08561e-ee58-4dda-bd3e-836871827130	0akl4fn6laafmcotdaeb	2025-07-04 14:36:49.982449+00	system	full	\N	t	\N	1901	5	\N
-75ea3fd3-fd1b-4c82-8752-1ff7ca024605	0akl4fn6laafmcotdaeb	2025-07-04 14:42:16.570982+00	system	full	\N	t	\N	7716	5	\N
-b190abb7-9c68-4a28-9a56-290d34ae69bf	15v2kx2zp3ymcoxduiq	2025-07-04 22:53:51.442042+00	system	full	\N	t	\N	8731	6	\N
-\.
+ALTER TABLE ONLY auth.mfa_amr_claims
+    ADD CONSTRAINT mfa_amr_claims_session_id_authentication_method_pkey UNIQUE (session_id, authentication_method);
 
 
 --
--- Data for Name: pos_mini_modular3_restore_points; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: mfa_challenges mfa_challenges_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_restore_points (id, created_at, tables_backup, schema_backup, created_by, expires_at) FROM stdin;
-rp_1751640676007_7xxs8a9vdvx	2025-07-04 14:51:16.092+00	{}		system	2025-07-11 14:51:16.092+00
-rp_1751640510167_v5gmu4ixzrj	2025-07-04 14:48:30.357+00	{}		system	2025-07-11 14:48:30.357+00
-rp_1751669623638_aw5ekvmyig6	2025-07-04 22:53:43.73+00	{}		system	2025-07-11 22:53:43.73+00
-rp_1751634147696_is9nixixlf	2025-07-04 13:02:27.81+00	{}		system	2025-07-11 13:02:27.81+00
-rp_1751639808959_davp3fqyj6k	2025-07-04 14:36:49.049+00	{}		system	2025-07-11 14:36:49.049+00
-rp_1751641028860_blsaixz2jb4	2025-07-04 14:57:08.949+00	{}		system	2025-07-11 14:57:08.949+00
-rp_1751633606873_t9pymxb147s	2025-07-04 12:53:26.964+00	{}		system	2025-07-11 12:53:26.964+00
-rp_1751640129549_lm8jpkwt42	2025-07-04 14:42:09.713+00	{}		system	2025-07-11 14:42:09.713+00
-rp_1751617487365_egol6m4kpoi	2025-07-04 08:24:47.523+00	{}		system	2025-07-11 08:24:47.523+00
-rp_1751599680266_e4ylybiwohn	2025-07-04 03:28:00.363+00	{}		system	2025-07-11 03:28:00.363+00
-rp_1751633770702_wc9scqxqvni	2025-07-04 12:56:10.797+00	{}		system	2025-07-11 12:56:10.797+00
-rp_1751599701897_05vqy5o6r664	2025-07-04 03:28:22.069+00	{}		system	2025-07-11 03:28:22.069+00
-rp_1751617947874_d4146ntfc9n	2025-07-04 08:32:28.06+00	{}		system	2025-07-11 08:32:28.06+00
-rp_1751594519363_opt8v2gldo	2025-07-04 02:01:59.46+00	{}		system	2025-07-11 02:01:59.46+00
-rp_1751594669921_pa4u2vraza	2025-07-04 02:04:30.018+00	{}		system	2025-07-11 02:04:30.018+00
-rp_1751594729358_y5vzx79po8d	2025-07-04 02:05:29.467+00	{}		system	2025-07-11 02:05:29.467+00
-rp_1751597076340_mv2s4qidpx	2025-07-04 02:44:36.517+00	{}		system	2025-07-11 02:44:36.517+00
-rp_1751597626143_dgo8va2z645	2025-07-04 02:53:46.239+00	{}		system	2025-07-11 02:53:46.239+00
-rp_1751598070832_0c1dxr1f8sh	2025-07-04 03:01:10.931+00	{}		system	2025-07-11 03:01:10.931+00
-rp_1751640570969_aa15cj8jr1i	2025-07-04 14:49:31.066+00	{}		system	2025-07-11 14:49:31.066+00
-rp_1751641154217_n483fe0z9va	2025-07-04 14:59:14.322+00	{}		system	2025-07-11 14:59:14.322+00
-rp_1751598400796_yz3c2wr16kc	2025-07-04 03:06:40.987+00	{}		system	2025-07-11 03:06:40.987+00
-rp_1751598620105_jgx2qdwzgrh	2025-07-04 03:10:20.204+00	{}		system	2025-07-11 03:10:20.204+00
-rp_1751598822849_4estkyxni6d	2025-07-04 03:13:42.951+00	{}		system	2025-07-11 03:13:42.951+00
-rp_1751586732148_3rq1payl0ud	2025-07-03 23:52:12.255+00	{}		system	2025-07-10 23:52:12.255+00
-rp_1751599718015_kplgdqk4t6n	2025-07-04 03:28:38.11+00	{}		system	2025-07-11 03:28:38.111+00
-rp_1751640433715_iqc0vpgpmec	2025-07-04 14:47:13.809+00	{}		system	2025-07-11 14:47:13.809+00
-rp_1751640749325_02jp2uw2z8lq	2025-07-04 14:52:29.422+00	{}		system	2025-07-11 14:52:29.422+00
-rp_1751586876910_il8998novgh	2025-07-03 23:54:37.012+00	{}		system	2025-07-10 23:54:37.012+00
-rp_1751599766420_41k2fwrnvzz	2025-07-04 03:29:26.515+00	{}		system	2025-07-11 03:29:26.516+00
-rp_1751599827243_si4k85c0lpa	2025-07-04 03:30:27.342+00	{}		system	2025-07-11 03:30:27.342+00
-\.
+ALTER TABLE ONLY auth.mfa_challenges
+    ADD CONSTRAINT mfa_challenges_pkey PRIMARY KEY (id);
 
 
 --
--- Data for Name: pos_mini_modular3_role_permissions; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: mfa_factors mfa_factors_last_challenged_at_key; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_role_permissions (id, subscription_tier, user_role, feature_name, can_read, can_write, can_delete, can_manage, usage_limit, config_data, created_at, updated_at) FROM stdin;
-366d08c0-0ebe-4d84-9f00-33a48eb69bfd	free	business_owner	product_management	t	t	t	t	20	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-7dcb1350-225f-4582-9f6a-c5497c7b8337	free	business_owner	pos_interface	t	t	f	t	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-8756f907-f221-4ecd-940f-ad7cc196c0da	free	business_owner	basic_reports	t	f	f	t	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-f89469f6-1670-44b3-9fa2-7a6b47623c54	free	business_owner	staff_management	t	t	t	t	3	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-6a98ccc5-3d99-4236-a454-206329b61497	free	business_owner	financial_tracking	t	t	f	t	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-805bdb3e-aa4e-4340-b0c4-ba7b280e619d	free	seller	product_management	t	f	f	f	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-2e10602e-d882-4add-bc96-184a98fef5ca	free	seller	pos_interface	t	t	f	f	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-fdaa9936-511a-4f70-9ed0-e0ab1a1c8633	free	seller	basic_reports	t	f	f	f	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-edf121d3-4b08-4028-a5d8-393b2d6f47d3	free	accountant	product_management	t	f	f	f	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-15ae7d18-c2ef-419f-977e-7b663f0abfed	free	accountant	financial_tracking	t	t	f	f	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-f2522ee3-c1bd-4281-8ea0-2a8318af1478	free	accountant	basic_reports	t	t	f	f	\N	{}	2025-07-06 16:40:23.275321+00	2025-07-06 16:40:23.275321+00
-\.
+ALTER TABLE ONLY auth.mfa_factors
+    ADD CONSTRAINT mfa_factors_last_challenged_at_key UNIQUE (last_challenged_at);
 
 
 --
--- Data for Name: pos_mini_modular3_subscription_history; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: mfa_factors mfa_factors_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_subscription_history (id, business_id, from_tier, to_tier, changed_by, amount_paid, payment_method, transaction_id, starts_at, ends_at, status, notes, created_at) FROM stdin;
-\.
-
-
---
--- Data for Name: pos_mini_modular3_subscription_plans; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.pos_mini_modular3_subscription_plans (id, tier, name, price_monthly, max_users, max_products, max_warehouses, max_branches, features, is_active, created_at, updated_at) FROM stdin;
-d70ea130-fa83-43e5-a540-353d5385de45	free	Gói Miễn Phí	0	3	50	1	1	["basic_pos", "inventory_tracking", "sales_reports"]	t	2025-06-30 09:20:59.160071+00	2025-06-30 09:20:59.160071+00
-09523773-7c0b-4583-b5eb-5fdc8820bc4f	basic	Gói Cơ Bản	299000	10	500	2	3	["advanced_pos", "multi_warehouse", "customer_management", "loyalty_program", "detailed_analytics"]	t	2025-06-30 09:20:59.160071+00	2025-06-30 09:20:59.160071+00
-41106873-3c32-41a6-9680-a6c611a81157	premium	Gói Cao Cấp	599000	50	5000	5	10	["enterprise_pos", "multi_branch", "advanced_analytics", "api_access", "priority_support", "custom_reports", "inventory_optimization"]	t	2025-06-30 09:20:59.160071+00	2025-06-30 09:20:59.160071+00
-\.
+ALTER TABLE ONLY auth.mfa_factors
+    ADD CONSTRAINT mfa_factors_pkey PRIMARY KEY (id);
 
 
 --
--- Data for Name: pos_mini_modular3_user_profiles; Type: TABLE DATA; Schema: public; Owner: -
+-- Name: one_time_tokens one_time_tokens_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
-COPY public.pos_mini_modular3_user_profiles (id, business_id, full_name, phone, email, avatar_url, role, status, permissions, login_method, last_login_at, employee_id, hire_date, notes, created_at, updated_at) FROM stdin;
-550ce2c2-2d18-4a75-8ece-0c2c8f4dadad	97da7e62-0409-4882-b80c-2c75b60cb0da	Bida Thiên Long 2	\N	ericphan28@gmail.com	\N	household_owner	active	[]	email	\N	\N	\N	\N	2025-06-30 22:38:05.559244+00	2025-07-04 22:53:48.217743+00
-c8c6a529-e57c-4dbf-900f-c26dd4815195	97da7e62-0409-4882-b80c-2c75b60cb0da	Nguyễn Văn A	+84901234567	+84901234567@staff.pos.local	\N	seller	active	[]	phone	\N	NV001	2025-06-30	Nhân viên bán hàng ca sáng	2025-06-30 23:54:50.592949+00	2025-07-04 22:53:48.217743+00
-8388a0e3-0a1a-4ce2-9c54-257994d44616	97da7e62-0409-4882-b80c-2c75b60cb0da	Eric Phan	+84909582083	+84909582083@staff.pos.local	\N	seller	active	[]	phone	\N	\N	2025-07-01	tét	2025-07-01 00:06:56.999574+00	2025-07-04 22:53:48.217743+00
-bba27899-25c8-4d5b-ba81-a0201f98bd00	97da7e62-0409-4882-b80c-2c75b60cb0da	Cym Thang	+84907136029	+84907136029@staff.pos.local	\N	manager	active	[]	phone	\N	Abcd	2025-07-01	Thang PHan	2025-07-01 00:09:24.007284+00	2025-07-04 22:53:48.217743+00
-b5ca076a-7b1f-4d4e-808d-0610f71288a8	97da7e62-0409-4882-b80c-2c75b60cb0da	Phan Thiên Vinh	+84922388399	+84922388399@staff.pos.local	\N	seller	active	[]	phone	\N	Thien Vinh	2025-07-01	Phan Thiên Vinh	2025-07-01 00:59:06.756329+00	2025-07-04 22:53:48.217743+00
-5f8d74cf-572a-4640-a565-34c5e1462f4e	61473fc9-16b2-45b8-87f0-45e0dc8612ef	Phan Thiên Hào	0907136029	cym_sunset@yahoo.com	\N	household_owner	active	[]	email	\N	\N	\N	\N	2025-07-01 10:40:25.745418+00	2025-07-04 22:53:48.217743+00
-8740cb15-5bea-480d-b58b-2f9fd51c144e	61473fc9-16b2-45b8-87f0-45e0dc8612ef	Hào 2	+84907131111	+84907131111@staff.pos.local	\N	manager	active	[]	phone	\N	cym_sunset@yahoo.com	2025-07-01	khogn biet	2025-07-01 10:43:03.150311+00	2025-07-04 22:53:48.217743+00
-9c9bc32f-6b7e-4239-857a-83d9b8b16ce7	dda92815-c1f0-4597-8c05-47ec1eb50873	Mẹ Yến	0909582083	yenwinny83@gmail.com	\N	household_owner	active	[]	email	\N	\N	\N	\N	2025-07-01 12:01:49.27648+00	2025-07-04 22:53:48.217743+00
-f1de66c9-166a-464c-89aa-bd75e1095040	\N	Super Administrator	0907136029	admin@giakiemso.com	\N	super_admin	active	[]	email	\N	\N	\N	\N	2025-07-02 02:16:30.46745+00	2025-07-04 22:53:48.217743+00
-8c3b94aa-68b1-47db-9029-07be27d3b917	1f0290fe-3ed1-440b-9a0b-68885aaba9f8	Test Direct Owner	\N	test.direct@rpc.test	\N	household_owner	active	[]	email	\N	\N	\N	\N	2025-07-03 13:28:51.257721+00	2025-07-04 22:53:48.217743+00
-3a799c65-8c58-429c-9e48-4d74b236ab97	c182f174-6372-4b34-964d-765fdc6dabbd	Nguyên Ly	+84909123456	\N	\N	household_owner	active	[]	phone	\N	\N	\N	\N	2025-07-03 13:38:21.323452+00	2025-07-04 22:53:48.217743+00
-9d40bf3c-e5a3-44c2-96c7-4c36a479e668	37c75836-edb9-4dc2-8bbe-83ad87ba274e	Nguyễn Huy	+84901456789	\N	\N	household_owner	active	[]	phone	\N	\N	\N	\N	2025-07-03 13:39:20.303084+00	2025-07-04 22:53:48.217743+00
-2706a795-f2a4-46f6-8030-3553a8a1ecb0	7a2a2404-8498-4396-bd2b-e6745591652b	Test Direct Owner 33	\N	test.direct2@rpc.test	\N	household_owner	active	[]	email	\N	\N	\N	\N	2025-07-03 13:28:51.487484+00	2025-07-04 22:53:48.217743+00
-\.
+ALTER TABLE ONLY auth.one_time_tokens
+    ADD CONSTRAINT one_time_tokens_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: refresh_tokens refresh_tokens_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.refresh_tokens
+    ADD CONSTRAINT refresh_tokens_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: refresh_tokens refresh_tokens_token_unique; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.refresh_tokens
+    ADD CONSTRAINT refresh_tokens_token_unique UNIQUE (token);
+
+
+--
+-- Name: saml_providers saml_providers_entity_id_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_providers
+    ADD CONSTRAINT saml_providers_entity_id_key UNIQUE (entity_id);
+
+
+--
+-- Name: saml_providers saml_providers_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_providers
+    ADD CONSTRAINT saml_providers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: saml_relay_states saml_relay_states_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_relay_states
+    ADD CONSTRAINT saml_relay_states_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+
+--
+-- Name: sessions sessions_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sessions
+    ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sso_domains sso_domains_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sso_domains
+    ADD CONSTRAINT sso_domains_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sso_providers sso_providers_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sso_providers
+    ADD CONSTRAINT sso_providers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: users users_phone_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.users
+    ADD CONSTRAINT users_phone_key UNIQUE (phone);
+
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
 
 
 --
@@ -5857,102 +4662,6 @@ ALTER TABLE ONLY public.pos_mini_modular3_businesses
 
 
 --
--- Name: pos_mini_modular3_product_categories pos_mini_modular3_product_categories_business_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_categories
-    ADD CONSTRAINT pos_mini_modular3_product_categories_business_id_name_key UNIQUE (business_id, name);
-
-
---
--- Name: pos_mini_modular3_product_categories pos_mini_modular3_product_categories_business_id_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_categories
-    ADD CONSTRAINT pos_mini_modular3_product_categories_business_id_slug_key UNIQUE (business_id, slug) DEFERRABLE;
-
-
---
--- Name: pos_mini_modular3_product_categories pos_mini_modular3_product_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_categories
-    ADD CONSTRAINT pos_mini_modular3_product_categories_pkey PRIMARY KEY (id);
-
-
---
--- Name: pos_mini_modular3_product_images pos_mini_modular3_product_images_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_images
-    ADD CONSTRAINT pos_mini_modular3_product_images_pkey PRIMARY KEY (id);
-
-
---
--- Name: pos_mini_modular3_product_variants pos_mini_modular3_product_variants_business_id_barcode_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_variants
-    ADD CONSTRAINT pos_mini_modular3_product_variants_business_id_barcode_key UNIQUE (business_id, barcode) DEFERRABLE;
-
-
---
--- Name: pos_mini_modular3_product_variants pos_mini_modular3_product_variants_business_id_sku_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_variants
-    ADD CONSTRAINT pos_mini_modular3_product_variants_business_id_sku_key UNIQUE (business_id, sku) DEFERRABLE;
-
-
---
--- Name: pos_mini_modular3_product_variants pos_mini_modular3_product_variants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_variants
-    ADD CONSTRAINT pos_mini_modular3_product_variants_pkey PRIMARY KEY (id);
-
-
---
--- Name: pos_mini_modular3_product_variants pos_mini_modular3_product_variants_product_id_attributes_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_variants
-    ADD CONSTRAINT pos_mini_modular3_product_variants_product_id_attributes_key UNIQUE (product_id, attributes);
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_business_id_barcode_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_business_id_barcode_key UNIQUE (business_id, barcode) DEFERRABLE;
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_business_id_sku_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_business_id_sku_key UNIQUE (business_id, sku) DEFERRABLE;
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_business_id_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_business_id_slug_key UNIQUE (business_id, slug) DEFERRABLE;
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_pkey PRIMARY KEY (id);
-
-
---
 -- Name: pos_mini_modular3_restore_history pos_mini_modular3_restore_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6030,6 +4739,286 @@ ALTER TABLE ONLY public.pos_mini_modular3_user_profiles
 
 ALTER TABLE ONLY public.pos_mini_modular3_user_profiles
     ADD CONSTRAINT pos_mini_modular3_user_profiles_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: audit_logs_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX audit_logs_instance_id_idx ON auth.audit_log_entries USING btree (instance_id);
+
+
+--
+-- Name: confirmation_token_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX confirmation_token_idx ON auth.users USING btree (confirmation_token) WHERE ((confirmation_token)::text !~ '^[0-9 ]*$'::text);
+
+
+--
+-- Name: email_change_token_current_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX email_change_token_current_idx ON auth.users USING btree (email_change_token_current) WHERE ((email_change_token_current)::text !~ '^[0-9 ]*$'::text);
+
+
+--
+-- Name: email_change_token_new_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX email_change_token_new_idx ON auth.users USING btree (email_change_token_new) WHERE ((email_change_token_new)::text !~ '^[0-9 ]*$'::text);
+
+
+--
+-- Name: factor_id_created_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX factor_id_created_at_idx ON auth.mfa_factors USING btree (user_id, created_at);
+
+
+--
+-- Name: flow_state_created_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX flow_state_created_at_idx ON auth.flow_state USING btree (created_at DESC);
+
+
+--
+-- Name: identities_email_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX identities_email_idx ON auth.identities USING btree (email text_pattern_ops);
+
+
+--
+-- Name: INDEX identities_email_idx; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON INDEX auth.identities_email_idx IS 'Auth: Ensures indexed queries on the email column';
+
+
+--
+-- Name: identities_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX identities_user_id_idx ON auth.identities USING btree (user_id);
+
+
+--
+-- Name: idx_auth_code; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX idx_auth_code ON auth.flow_state USING btree (auth_code);
+
+
+--
+-- Name: idx_user_id_auth_method; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX idx_user_id_auth_method ON auth.flow_state USING btree (user_id, authentication_method);
+
+
+--
+-- Name: mfa_challenge_created_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX mfa_challenge_created_at_idx ON auth.mfa_challenges USING btree (created_at DESC);
+
+
+--
+-- Name: mfa_factors_user_friendly_name_unique; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX mfa_factors_user_friendly_name_unique ON auth.mfa_factors USING btree (friendly_name, user_id) WHERE (TRIM(BOTH FROM friendly_name) <> ''::text);
+
+
+--
+-- Name: mfa_factors_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX mfa_factors_user_id_idx ON auth.mfa_factors USING btree (user_id);
+
+
+--
+-- Name: one_time_tokens_relates_to_hash_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX one_time_tokens_relates_to_hash_idx ON auth.one_time_tokens USING hash (relates_to);
+
+
+--
+-- Name: one_time_tokens_token_hash_hash_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX one_time_tokens_token_hash_hash_idx ON auth.one_time_tokens USING hash (token_hash);
+
+
+--
+-- Name: one_time_tokens_user_id_token_type_key; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX one_time_tokens_user_id_token_type_key ON auth.one_time_tokens USING btree (user_id, token_type);
+
+
+--
+-- Name: reauthentication_token_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX reauthentication_token_idx ON auth.users USING btree (reauthentication_token) WHERE ((reauthentication_token)::text !~ '^[0-9 ]*$'::text);
+
+
+--
+-- Name: recovery_token_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX recovery_token_idx ON auth.users USING btree (recovery_token) WHERE ((recovery_token)::text !~ '^[0-9 ]*$'::text);
+
+
+--
+-- Name: refresh_tokens_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX refresh_tokens_instance_id_idx ON auth.refresh_tokens USING btree (instance_id);
+
+
+--
+-- Name: refresh_tokens_instance_id_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX refresh_tokens_instance_id_user_id_idx ON auth.refresh_tokens USING btree (instance_id, user_id);
+
+
+--
+-- Name: refresh_tokens_parent_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX refresh_tokens_parent_idx ON auth.refresh_tokens USING btree (parent);
+
+
+--
+-- Name: refresh_tokens_session_id_revoked_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX refresh_tokens_session_id_revoked_idx ON auth.refresh_tokens USING btree (session_id, revoked);
+
+
+--
+-- Name: refresh_tokens_updated_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX refresh_tokens_updated_at_idx ON auth.refresh_tokens USING btree (updated_at DESC);
+
+
+--
+-- Name: saml_providers_sso_provider_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX saml_providers_sso_provider_id_idx ON auth.saml_providers USING btree (sso_provider_id);
+
+
+--
+-- Name: saml_relay_states_created_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX saml_relay_states_created_at_idx ON auth.saml_relay_states USING btree (created_at DESC);
+
+
+--
+-- Name: saml_relay_states_for_email_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX saml_relay_states_for_email_idx ON auth.saml_relay_states USING btree (for_email);
+
+
+--
+-- Name: saml_relay_states_sso_provider_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX saml_relay_states_sso_provider_id_idx ON auth.saml_relay_states USING btree (sso_provider_id);
+
+
+--
+-- Name: sessions_not_after_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX sessions_not_after_idx ON auth.sessions USING btree (not_after DESC);
+
+
+--
+-- Name: sessions_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX sessions_user_id_idx ON auth.sessions USING btree (user_id);
+
+
+--
+-- Name: sso_domains_domain_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX sso_domains_domain_idx ON auth.sso_domains USING btree (lower(domain));
+
+
+--
+-- Name: sso_domains_sso_provider_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX sso_domains_sso_provider_id_idx ON auth.sso_domains USING btree (sso_provider_id);
+
+
+--
+-- Name: sso_providers_resource_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX sso_providers_resource_id_idx ON auth.sso_providers USING btree (lower(resource_id));
+
+
+--
+-- Name: unique_phone_factor_per_user; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX unique_phone_factor_per_user ON auth.mfa_factors USING btree (user_id, phone);
+
+
+--
+-- Name: user_id_created_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX user_id_created_at_idx ON auth.sessions USING btree (user_id, created_at);
+
+
+--
+-- Name: users_email_partial_key; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE UNIQUE INDEX users_email_partial_key ON auth.users USING btree (email) WHERE (is_sso_user = false);
+
+
+--
+-- Name: INDEX users_email_partial_key; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON INDEX auth.users_email_partial_key IS 'Auth: A partial unique index that applies only when is_sso_user is false';
+
+
+--
+-- Name: users_instance_id_email_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX users_instance_id_email_idx ON auth.users USING btree (instance_id, lower((email)::text));
+
+
+--
+-- Name: users_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX users_instance_id_idx ON auth.users USING btree (instance_id);
+
+
+--
+-- Name: users_is_anonymous_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 
 --
@@ -6142,69 +5131,6 @@ CREATE INDEX idx_businesses_subscription_status ON public.pos_mini_modular3_busi
 --
 
 CREATE INDEX idx_businesses_subscription_tier ON public.pos_mini_modular3_businesses USING btree (subscription_tier);
-
-
---
--- Name: idx_categories_active; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_categories_active ON public.pos_mini_modular3_product_categories USING btree (business_id, is_active);
-
-
---
--- Name: idx_categories_business_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_categories_business_id ON public.pos_mini_modular3_product_categories USING btree (business_id);
-
-
---
--- Name: idx_categories_display_order; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_categories_display_order ON public.pos_mini_modular3_product_categories USING btree (business_id, display_order);
-
-
---
--- Name: idx_categories_featured; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_categories_featured ON public.pos_mini_modular3_product_categories USING btree (business_id, is_featured);
-
-
---
--- Name: idx_categories_parent_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_categories_parent_id ON public.pos_mini_modular3_product_categories USING btree (parent_id);
-
-
---
--- Name: idx_images_business_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_images_business_id ON public.pos_mini_modular3_product_images USING btree (business_id);
-
-
---
--- Name: idx_images_primary; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_images_primary ON public.pos_mini_modular3_product_images USING btree (product_id, is_primary) WHERE (is_primary = true);
-
-
---
--- Name: idx_images_product_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_images_product_id ON public.pos_mini_modular3_product_images USING btree (product_id);
-
-
---
--- Name: idx_images_variant_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_images_variant_id ON public.pos_mini_modular3_product_images USING btree (variant_id);
 
 
 --
@@ -6334,76 +5260,6 @@ CREATE INDEX idx_pos_mini_modular3_user_profiles_status ON public.pos_mini_modul
 
 
 --
--- Name: idx_products_active; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_active ON public.pos_mini_modular3_products USING btree (business_id, is_active);
-
-
---
--- Name: idx_products_barcode; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_barcode ON public.pos_mini_modular3_products USING btree (business_id, barcode) WHERE (barcode IS NOT NULL);
-
-
---
--- Name: idx_products_business_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_business_id ON public.pos_mini_modular3_products USING btree (business_id);
-
-
---
--- Name: idx_products_category_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_category_id ON public.pos_mini_modular3_products USING btree (category_id);
-
-
---
--- Name: idx_products_featured; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_featured ON public.pos_mini_modular3_products USING btree (business_id, is_featured);
-
-
---
--- Name: idx_products_name_search; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_name_search ON public.pos_mini_modular3_products USING gin (to_tsvector('english'::regconfig, name));
-
-
---
--- Name: idx_products_price_range; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_price_range ON public.pos_mini_modular3_products USING btree (business_id, unit_price) WHERE (is_active = true);
-
-
---
--- Name: idx_products_sku; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_sku ON public.pos_mini_modular3_products USING btree (business_id, sku) WHERE (sku IS NOT NULL);
-
-
---
--- Name: idx_products_stock_low; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_stock_low ON public.pos_mini_modular3_products USING btree (business_id, current_stock, min_stock_level) WHERE (track_stock = true);
-
-
---
--- Name: idx_products_tags; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_products_tags ON public.pos_mini_modular3_products USING gin (tags);
-
-
---
 -- Name: idx_restore_history_backup_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6446,45 +5302,10 @@ CREATE INDEX idx_role_permissions_lookup ON public.pos_mini_modular3_role_permis
 
 
 --
--- Name: idx_user_profiles_id_active; Type: INDEX; Schema: public; Owner: -
+-- Name: users on_auth_user_created; Type: TRIGGER; Schema: auth; Owner: -
 --
 
-CREATE INDEX idx_user_profiles_id_active ON public.pos_mini_modular3_user_profiles USING btree (id) WHERE (status = 'active'::text);
-
-
---
--- Name: idx_variants_active; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_variants_active ON public.pos_mini_modular3_product_variants USING btree (product_id, is_active);
-
-
---
--- Name: idx_variants_attributes; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_variants_attributes ON public.pos_mini_modular3_product_variants USING gin (attributes);
-
-
---
--- Name: idx_variants_business_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_variants_business_id ON public.pos_mini_modular3_product_variants USING btree (business_id);
-
-
---
--- Name: idx_variants_product_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_variants_product_id ON public.pos_mini_modular3_product_variants USING btree (product_id);
-
-
---
--- Name: idx_variants_sku; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_variants_sku ON public.pos_mini_modular3_product_variants USING btree (business_id, sku) WHERE (sku IS NOT NULL);
+CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.pos_mini_modular3_handle_new_user();
 
 
 --
@@ -6492,27 +5313,6 @@ CREATE INDEX idx_variants_sku ON public.pos_mini_modular3_product_variants USING
 --
 
 CREATE TRIGGER trigger_update_backup_schedules_updated_at BEFORE UPDATE ON public.pos_mini_modular3_backup_schedules FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-
-
---
--- Name: pos_mini_modular3_product_categories trigger_update_category_timestamp; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trigger_update_category_timestamp BEFORE UPDATE ON public.pos_mini_modular3_product_categories FOR EACH ROW EXECUTE FUNCTION public.pos_mini_modular3_update_category_timestamp();
-
-
---
--- Name: pos_mini_modular3_products trigger_update_product_timestamp; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trigger_update_product_timestamp BEFORE UPDATE ON public.pos_mini_modular3_products FOR EACH ROW EXECUTE FUNCTION public.pos_mini_modular3_update_product_timestamp();
-
-
---
--- Name: pos_mini_modular3_product_variants trigger_update_variant_timestamp; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trigger_update_variant_timestamp BEFORE UPDATE ON public.pos_mini_modular3_product_variants FOR EACH ROW EXECUTE FUNCTION public.pos_mini_modular3_update_variant_timestamp();
 
 
 --
@@ -6548,6 +5348,94 @@ CREATE TRIGGER update_pos_mini_modular3_user_profiles_updated_at BEFORE UPDATE O
 --
 
 CREATE TRIGGER update_role_permissions_updated_at BEFORE UPDATE ON public.pos_mini_modular3_role_permissions FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+
+--
+-- Name: identities identities_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.identities
+    ADD CONSTRAINT identities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mfa_amr_claims mfa_amr_claims_session_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_amr_claims
+    ADD CONSTRAINT mfa_amr_claims_session_id_fkey FOREIGN KEY (session_id) REFERENCES auth.sessions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mfa_challenges mfa_challenges_auth_factor_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_challenges
+    ADD CONSTRAINT mfa_challenges_auth_factor_id_fkey FOREIGN KEY (factor_id) REFERENCES auth.mfa_factors(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mfa_factors mfa_factors_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_factors
+    ADD CONSTRAINT mfa_factors_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: one_time_tokens one_time_tokens_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.one_time_tokens
+    ADD CONSTRAINT one_time_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: refresh_tokens refresh_tokens_session_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.refresh_tokens
+    ADD CONSTRAINT refresh_tokens_session_id_fkey FOREIGN KEY (session_id) REFERENCES auth.sessions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: saml_providers saml_providers_sso_provider_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_providers
+    ADD CONSTRAINT saml_providers_sso_provider_id_fkey FOREIGN KEY (sso_provider_id) REFERENCES auth.sso_providers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: saml_relay_states saml_relay_states_flow_state_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_relay_states
+    ADD CONSTRAINT saml_relay_states_flow_state_id_fkey FOREIGN KEY (flow_state_id) REFERENCES auth.flow_state(id) ON DELETE CASCADE;
+
+
+--
+-- Name: saml_relay_states saml_relay_states_sso_provider_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_relay_states
+    ADD CONSTRAINT saml_relay_states_sso_provider_id_fkey FOREIGN KEY (sso_provider_id) REFERENCES auth.sso_providers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sessions sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sessions
+    ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sso_domains sso_domains_sso_provider_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sso_domains
+    ADD CONSTRAINT sso_domains_sso_provider_id_fkey FOREIGN KEY (sso_provider_id) REFERENCES auth.sso_providers(id) ON DELETE CASCADE;
 
 
 --
@@ -6623,118 +5511,6 @@ ALTER TABLE ONLY public.pos_mini_modular3_business_invitations
 
 
 --
--- Name: pos_mini_modular3_product_categories pos_mini_modular3_product_categories_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_categories
-    ADD CONSTRAINT pos_mini_modular3_product_categories_business_id_fkey FOREIGN KEY (business_id) REFERENCES public.pos_mini_modular3_businesses(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_product_categories pos_mini_modular3_product_categories_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_categories
-    ADD CONSTRAINT pos_mini_modular3_product_categories_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.pos_mini_modular3_user_profiles(id);
-
-
---
--- Name: pos_mini_modular3_product_categories pos_mini_modular3_product_categories_parent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_categories
-    ADD CONSTRAINT pos_mini_modular3_product_categories_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.pos_mini_modular3_product_categories(id) ON DELETE SET NULL;
-
-
---
--- Name: pos_mini_modular3_product_categories pos_mini_modular3_product_categories_updated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_categories
-    ADD CONSTRAINT pos_mini_modular3_product_categories_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.pos_mini_modular3_user_profiles(id);
-
-
---
--- Name: pos_mini_modular3_product_images pos_mini_modular3_product_images_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_images
-    ADD CONSTRAINT pos_mini_modular3_product_images_business_id_fkey FOREIGN KEY (business_id) REFERENCES public.pos_mini_modular3_businesses(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_product_images pos_mini_modular3_product_images_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_images
-    ADD CONSTRAINT pos_mini_modular3_product_images_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.pos_mini_modular3_products(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_product_images pos_mini_modular3_product_images_uploaded_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_images
-    ADD CONSTRAINT pos_mini_modular3_product_images_uploaded_by_fkey FOREIGN KEY (uploaded_by) REFERENCES public.pos_mini_modular3_user_profiles(id);
-
-
---
--- Name: pos_mini_modular3_product_images pos_mini_modular3_product_images_variant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_images
-    ADD CONSTRAINT pos_mini_modular3_product_images_variant_id_fkey FOREIGN KEY (variant_id) REFERENCES public.pos_mini_modular3_product_variants(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_product_variants pos_mini_modular3_product_variants_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_variants
-    ADD CONSTRAINT pos_mini_modular3_product_variants_business_id_fkey FOREIGN KEY (business_id) REFERENCES public.pos_mini_modular3_businesses(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_product_variants pos_mini_modular3_product_variants_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_product_variants
-    ADD CONSTRAINT pos_mini_modular3_product_variants_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.pos_mini_modular3_products(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_business_id_fkey FOREIGN KEY (business_id) REFERENCES public.pos_mini_modular3_businesses(id) ON DELETE CASCADE;
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_category_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.pos_mini_modular3_product_categories(id) ON DELETE SET NULL;
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.pos_mini_modular3_user_profiles(id);
-
-
---
--- Name: pos_mini_modular3_products pos_mini_modular3_products_updated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pos_mini_modular3_products
-    ADD CONSTRAINT pos_mini_modular3_products_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.pos_mini_modular3_user_profiles(id);
-
-
---
 -- Name: pos_mini_modular3_restore_history pos_mini_modular3_restore_history_backup_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6757,6 +5533,102 @@ ALTER TABLE ONLY public.pos_mini_modular3_user_profiles
 ALTER TABLE ONLY public.pos_mini_modular3_user_profiles
     ADD CONSTRAINT pos_mini_modular3_user_profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
+
+--
+-- Name: audit_log_entries; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.audit_log_entries ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: flow_state; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.flow_state ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: identities; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.identities ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: instances; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.instances ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: mfa_amr_claims; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.mfa_amr_claims ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: mfa_challenges; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.mfa_challenges ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: mfa_factors; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.mfa_factors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: one_time_tokens; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.one_time_tokens ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: refresh_tokens; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.refresh_tokens ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: saml_providers; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.saml_providers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: saml_relay_states; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.saml_relay_states ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: schema_migrations; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.schema_migrations ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: sessions; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: sso_domains; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.sso_domains ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: sso_providers; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.sso_providers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: users; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: pos_mini_modular3_business_types Allow super admin to manage business types; Type: POLICY; Schema: public; Owner: -
@@ -6832,24 +5704,6 @@ CREATE POLICY business_owners_update_own_business ON public.pos_mini_modular3_bu
 
 
 --
--- Name: pos_mini_modular3_product_categories categories_business_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY categories_business_isolation ON public.pos_mini_modular3_product_categories TO authenticated USING (((business_id = public.pos_mini_modular3_current_user_business_id()) OR (EXISTS ( SELECT 1
-   FROM public.pos_mini_modular3_user_profiles
-  WHERE ((pos_mini_modular3_user_profiles.id = auth.uid()) AND (pos_mini_modular3_user_profiles.role = 'super_admin'::text))))));
-
-
---
--- Name: pos_mini_modular3_product_images images_business_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY images_business_isolation ON public.pos_mini_modular3_product_images TO authenticated USING (((business_id = public.pos_mini_modular3_current_user_business_id()) OR (EXISTS ( SELECT 1
-   FROM public.pos_mini_modular3_user_profiles
-  WHERE ((pos_mini_modular3_user_profiles.id = auth.uid()) AND (pos_mini_modular3_user_profiles.role = 'super_admin'::text))))));
-
-
---
 -- Name: pos_mini_modular3_business_invitations invited_users_see_own_invitations; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -6883,30 +5737,6 @@ ALTER TABLE public.pos_mini_modular3_business_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pos_mini_modular3_businesses ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: pos_mini_modular3_product_categories; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.pos_mini_modular3_product_categories ENABLE ROW LEVEL SECURITY;
-
---
--- Name: pos_mini_modular3_product_images; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.pos_mini_modular3_product_images ENABLE ROW LEVEL SECURITY;
-
---
--- Name: pos_mini_modular3_product_variants; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.pos_mini_modular3_product_variants ENABLE ROW LEVEL SECURITY;
-
---
--- Name: pos_mini_modular3_products; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.pos_mini_modular3_products ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: pos_mini_modular3_subscription_history; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -6923,15 +5753,6 @@ ALTER TABLE public.pos_mini_modular3_subscription_plans ENABLE ROW LEVEL SECURIT
 --
 
 ALTER TABLE public.pos_mini_modular3_user_profiles ENABLE ROW LEVEL SECURITY;
-
---
--- Name: pos_mini_modular3_products products_business_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY products_business_isolation ON public.pos_mini_modular3_products TO authenticated USING (((business_id = public.pos_mini_modular3_current_user_business_id()) OR (EXISTS ( SELECT 1
-   FROM public.pos_mini_modular3_user_profiles
-  WHERE ((pos_mini_modular3_user_profiles.id = auth.uid()) AND (pos_mini_modular3_user_profiles.role = 'super_admin'::text))))));
-
 
 --
 -- Name: pos_mini_modular3_subscription_plans subscription_plans_public_read; Type: POLICY; Schema: public; Owner: -
@@ -6970,15 +5791,6 @@ CREATE POLICY user_own_access_only ON public.pos_mini_modular3_user_profiles TO 
 --
 
 CREATE POLICY users_own_profile_safe ON public.pos_mini_modular3_user_profiles TO authenticated USING ((id = auth.uid())) WITH CHECK ((id = auth.uid()));
-
-
---
--- Name: pos_mini_modular3_product_variants variants_business_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY variants_business_isolation ON public.pos_mini_modular3_product_variants TO authenticated USING (((business_id = public.pos_mini_modular3_current_user_business_id()) OR (EXISTS ( SELECT 1
-   FROM public.pos_mini_modular3_user_profiles
-  WHERE ((pos_mini_modular3_user_profiles.id = auth.uid()) AND (pos_mini_modular3_user_profiles.role = 'super_admin'::text))))));
 
 
 --
