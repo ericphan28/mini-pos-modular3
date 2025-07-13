@@ -6,7 +6,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createClient } from '@/lib/supabase/client';
-import { terminalLogger } from '@/lib/utils/terminal-logger';
+import { optimizedLogger } from '@/lib/utils/optimized-logger';
+import { SessionCacheManager, type CompleteUserSession } from '@/lib/utils/session-cache';
+import { authLogger, setLoggerContext } from '@/lib/logger';
 import { AlertCircle, AlertTriangle, CheckCircle, Clock, Eye, EyeOff, Lock, Shield, User, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -49,7 +51,7 @@ export function LoginForm() {
       { id: 'redirect', name: 'Chuyển hướng', status: 'pending' }
     ];
     setLoginSteps(steps);
-    terminalLogger.info('INIT', 'Khởi tạo các bước đăng nhập', steps);
+    optimizedLogger.info('INIT', 'Khởi tạo các bước đăng nhập', steps);
   };
 
   const updateStep = (stepId: string, status: LoginStep['status'], details?: string): void => {
@@ -61,11 +63,11 @@ export function LoginForm() {
     setCurrentStep(stepId);
     
     if (status === 'processing') {
-      terminalLogger.info('STEP', `Bắt đầu bước: ${stepId}`, details);
+      optimizedLogger.info('STEP', `Bắt đầu bước: ${stepId}`, details);
     } else if (status === 'completed') {
-      terminalLogger.success('STEP', `Hoàn thành bước: ${stepId}`, details);
+      optimizedLogger.success('STEP', `Hoàn thành bước: ${stepId}`, details);
     } else if (status === 'error') {
-      terminalLogger.error('STEP', `Lỗi tại bước: ${stepId}`, details);
+      optimizedLogger.error('STEP', `Lỗi tại bước: ${stepId}`, details);
     }
   };
 
@@ -238,6 +240,16 @@ export function LoginForm() {
     // Khởi tạo các bước đăng nhập
     initializeSteps();
 
+    // Set initial logger context với IP và User Agent
+    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown';
+    const ipAddress = '192.168.1.1'; // TODO: Get real IP from request
+    
+    setLoggerContext({
+      ip_address: ipAddress,
+      user_agent: userAgent,
+      request_id: `login_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    });
+
     try {
       // Step 1: Validate input
       updateStep('validation', 'processing', 'Kiểm tra email và mật khẩu');
@@ -245,17 +257,37 @@ export function LoginForm() {
       if (validationError) {
         updateStep('validation', 'error', validationError.message);
         setError(validationError);
+        
+        // Log validation failure
+        await authLogger.loginFailed({
+          reason: 'Validation failed',
+          email: email.includes('@') ? email : undefined,
+          phone: !email.includes('@') ? email : undefined,
+          ip_address: ipAddress,
+          user_agent: userAgent,
+          error_code: 'VALIDATION_ERROR'
+        });
+        
         return;
       }
       updateStep('validation', 'completed', 'Thông tin hợp lệ');
 
-      terminalLogger.info('LOGIN-FORM', 'Bắt đầu quá trình đăng nhập');
+      optimizedLogger.info('LOGIN-FORM', 'Bắt đầu quá trình đăng nhập');
       const supabase = createClient();
       const emailTrimmed = email.trim().toLowerCase();
 
+      // Log login attempt
+      await authLogger.loginAttempt({
+        email: emailTrimmed.includes('@') ? emailTrimmed : undefined,
+        phone: !emailTrimmed.includes('@') ? emailTrimmed : undefined,
+        method: emailTrimmed.includes('@') ? 'email' : 'phone',
+        ip_address: ipAddress,
+        user_agent: userAgent
+      });
+
       // Step 2: Authenticate user
       updateStep('auth', 'processing', 'Đang xác thực với Supabase');
-      terminalLogger.info('AUTH', 'Gửi yêu cầu xác thực', { email: emailTrimmed });
+      optimizedLogger.info('AUTH', 'Gửi yêu cầu xác thực', { email: emailTrimmed });
       
       let authData: unknown = null;
       let authError: unknown = null;
@@ -269,13 +301,13 @@ export function LoginForm() {
         authData = result.data;
         authError = result.error;
         
-        terminalLogger.debug('AUTH', 'Nhận kết quả xác thực', {
+        optimizedLogger.debug('AUTH', 'Nhận kết quả xác thực', {
           hasUser: !!(result.data?.user),
           hasError: !!result.error,
           errorMessage: result.error?.message
         });
       } catch (authException) {
-        terminalLogger.error('AUTH', 'Exception trong quá trình xác thực', authException);
+        optimizedLogger.error('AUTH', 'Exception trong quá trình xác thực', authException);
         authError = authException;
       }
 
@@ -283,19 +315,40 @@ export function LoginForm() {
       if (authError) {
         updateStep('auth', 'error', 'Xác thực thất bại');
         const loginError = classifyError(authError);
-        terminalLogger.warn('AUTH', 'Xác thực thất bại', { 
+        optimizedLogger.warn('AUTH', 'Xác thực thất bại', { 
           error: loginError,
           originalError: authError
         });
+        
+        // Log login failure với professional logger
+        await authLogger.loginFailed({
+          reason: loginError.message,
+          email: emailTrimmed.includes('@') ? emailTrimmed : undefined,
+          phone: !emailTrimmed.includes('@') ? emailTrimmed : undefined,
+          ip_address: ipAddress,
+          user_agent: userAgent,
+          error_code: 'AUTH_FAILED'
+        });
+        
         setError(loginError);
         return;
       }
 
       // Extract user safely
-      const user = (authData as { user?: { id: string; email?: string } })?.user;
+      const user = (authData as { user?: { id: string; email?: string; user_metadata?: Record<string, unknown> } })?.user;
       if (!user?.id) {
         updateStep('auth', 'error', 'Không có thông tin người dùng');
-        terminalLogger.error('AUTH', 'Không có user trong kết quả auth');
+        optimizedLogger.error('AUTH', 'Không có user trong kết quả auth');
+        
+        await authLogger.loginFailed({
+          reason: 'No user data returned',
+          email: emailTrimmed.includes('@') ? emailTrimmed : undefined,
+          phone: !emailTrimmed.includes('@') ? emailTrimmed : undefined,
+          ip_address: ipAddress,
+          user_agent: userAgent,
+          error_code: 'NO_USER_DATA'
+        });
+        
         setError({
           type: 'auth',
           message: 'Đăng nhập thất bại',
@@ -305,27 +358,27 @@ export function LoginForm() {
       }
 
       updateStep('auth', 'completed', `Đã xác thực: ${user.email}`);
-      terminalLogger.success('AUTH', 'Xác thực thành công', { 
+      optimizedLogger.success('AUTH', 'Xác thực thành công', { 
         userId: user.id,
         email: user.email
       });
 
       // Step 3: Get user profile
       updateStep('profile', 'processing', 'Đang tải thông tin người dùng');
-      terminalLogger.info('PROFILE', 'Bắt đầu tải profile người dùng');
+      optimizedLogger.info('PROFILE', 'Bắt đầu tải profile người dùng');
       
       // First, let's check if the function exists
       try {
-        terminalLogger.debug('PROFILE', 'Kiểm tra function enhanced auth');
+        optimizedLogger.debug('PROFILE', 'Kiểm tra function enhanced auth');
         const functionCheckResult = await supabase.rpc('pos_mini_modular3_get_user_with_business_complete', { p_user_id: user.id });
-        terminalLogger.debug('PROFILE', 'Kết quả kiểm tra function', functionCheckResult);
+        optimizedLogger.debug('PROFILE', 'Kết quả kiểm tra function', functionCheckResult);
       } catch (functionCheckError) {
         updateStep('profile', 'error', 'Function enhanced auth không tồn tại');
-        terminalLogger.error('PROFILE', 'Enhanced auth function check failed', functionCheckError);
+        optimizedLogger.error('PROFILE', 'Enhanced auth function check failed', functionCheckError);
         
         // Fallback to basic profile check
         updateStep('profile', 'processing', 'Fallback: kiểm tra profile cơ bản');
-        terminalLogger.info('PROFILE', 'Chuyển sang kiểm tra profile cơ bản');
+        optimizedLogger.info('PROFILE', 'Chuyển sang kiểm tra profile cơ bản');
         try {
           const profileCheck = await supabase
             .from('pos_mini_modular3_user_profiles')
@@ -333,15 +386,15 @@ export function LoginForm() {
             .eq('id', user.id)
             .single();
           
-          terminalLogger.debug('PROFILE', 'Kết quả kiểm tra profile cơ bản', profileCheck);
+          optimizedLogger.debug('PROFILE', 'Kết quả kiểm tra profile cơ bản', profileCheck);
           
           if (profileCheck.error) {
-            terminalLogger.error('PROFILE', 'Không tìm thấy profile', profileCheck.error);
+            optimizedLogger.error('PROFILE', 'Không tìm thấy profile', profileCheck.error);
             
             // If no profile exists, try to create one automatically
             if (profileCheck.error.code === 'PGRST116') {
               updateStep('profile', 'processing', 'Tạo profile tự động');
-              terminalLogger.info('PROFILE', 'Không có profile - thử tạo tự động');
+              optimizedLogger.info('PROFILE', 'Không có profile - thử tạo tự động');
               
               try {
                 // Create basic profile for the user
@@ -357,19 +410,19 @@ export function LoginForm() {
                     updated_at: new Date().toISOString()
                   });
                 
-                terminalLogger.debug('PROFILE', 'Kết quả tạo profile', createProfileResult);
+                optimizedLogger.debug('PROFILE', 'Kết quả tạo profile', createProfileResult);
                 
                 if (createProfileResult.error) {
-                  terminalLogger.error('PROFILE', 'Không thể tạo profile tự động', createProfileResult.error);
+                  optimizedLogger.error('PROFILE', 'Không thể tạo profile tự động', createProfileResult.error);
                   updateStep('profile', 'error', 'Không thể tạo profile - chuyển hướng signup');
                   router.push('/auth/sign-up');
                   return;
                 } else {
                   updateStep('profile', 'completed', 'Đã tạo profile thành công');
-                  terminalLogger.success('PROFILE', 'Tạo profile thành công - tiếp tục login');
+                  optimizedLogger.success('PROFILE', 'Tạo profile thành công - tiếp tục login');
                 }
               } catch (createError) {
-                terminalLogger.error('PROFILE', 'Exception khi tạo profile', createError);
+                optimizedLogger.error('PROFILE', 'Exception khi tạo profile', createError);
                 updateStep('profile', 'error', 'Lỗi khi tạo profile - chuyển hướng signup');
                 router.push('/auth/sign-up');
                 return;
@@ -383,13 +436,13 @@ export function LoginForm() {
           updateStep('business', 'completed', 'Bỏ qua kiểm tra business (fallback)');
           updateStep('permissions', 'completed', 'Bỏ qua kiểm tra permissions (fallback)');
           updateStep('redirect', 'processing', 'Chuyển hướng dashboard');
-          terminalLogger.success('PROFILE', 'Profile OK, chuyển hướng dashboard');
-          terminalLogger.success('LOGIN', 'Đăng nhập thành công (fallback mode)');
+          optimizedLogger.success('PROFILE', 'Profile OK, chuyển hướng dashboard');
+          optimizedLogger.success('LOGIN', 'Đăng nhập thành công (fallback mode)');
           router.push('/dashboard');
           return;
           
         } catch (fallbackError) {
-          terminalLogger.error('PROFILE', 'Fallback profile check cũng thất bại', fallbackError);
+          optimizedLogger.error('PROFILE', 'Fallback profile check cũng thất bại', fallbackError);
         }
         
         // Ultimate fallback - just redirect to dashboard
@@ -397,7 +450,7 @@ export function LoginForm() {
         updateStep('business', 'completed', 'Bỏ qua tất cả kiểm tra');
         updateStep('permissions', 'completed', 'Bỏ qua tất cả kiểm tra');
         updateStep('redirect', 'processing', 'Chuyển hướng dashboard (fallback)');
-        terminalLogger.warn('PROFILE', 'Ultimate fallback - chuyển hướng dashboard');
+        optimizedLogger.warn('PROFILE', 'Ultimate fallback - chuyển hướng dashboard');
         router.push('/dashboard');
         return;
       }
@@ -406,7 +459,7 @@ export function LoginForm() {
       let profileError: unknown = null;
 
       try {
-        terminalLogger.info('PROFILE', 'Gọi enhanced RPC function');
+        optimizedLogger.info('PROFILE', 'Gọi enhanced RPC function');
         const result = await supabase.rpc(
           'pos_mini_modular3_get_user_with_business_complete',
           { p_user_id: user.id }
@@ -415,31 +468,30 @@ export function LoginForm() {
         profileData = result.data;
         profileError = result.error;
         
-        terminalLogger.debug('PROFILE', 'Enhanced RPC result', result);
-        terminalLogger.debug('PROFILE', 'Enhanced profile data', profileData);
-        terminalLogger.debug('PROFILE', 'Enhanced profile error', profileError);
+        optimizedLogger.debug('PROFILE', 'Enhanced RPC result', result);
+        optimizedLogger.debug('PROFILE', 'Enhanced profile data', profileData);
+        optimizedLogger.debug('PROFILE', 'Enhanced profile error', profileError);
         
         // Debug: Log the entire structure
         if (profileData && typeof profileData === 'object') {
-          const profile = profileData as Record<string, unknown>;
-          terminalLogger.debug('PROFILE', 'ProfileData structure', JSON.stringify(profileData, null, 2));
+          optimizedLogger.debug('PROFILE', 'ProfileData structure', JSON.stringify(profileData, null, 2));
         }
         
-        terminalLogger.info('PROFILE', 'Enhanced profile result', {
+        optimizedLogger.info('PROFILE', 'Enhanced profile result', {
           hasProfile: !!profileData,
           success: (profileData as { success?: boolean })?.success,
           profileExists: (profileData as { profile_exists?: boolean })?.profile_exists,
           error: profileError
         });
       } catch (profileException) {
-        terminalLogger.error('PROFILE', 'Profile fetch exception', profileException);
+        optimizedLogger.error('PROFILE', 'Profile fetch exception', profileException);
         profileError = profileException;
       }
 
       // Handle profile errors
       if (profileError) {
         updateStep('profile', 'error', 'Lỗi khi tải profile');
-        terminalLogger.error('PROFILE', 'Profile fetch failed', profileError);
+        optimizedLogger.error('PROFILE', 'Profile fetch failed', profileError);
         setError({
           type: 'access',
           message: 'Không thể tải thông tin tài khoản',
@@ -451,7 +503,7 @@ export function LoginForm() {
       // Handle profile data
       if (!profileData || typeof profileData !== 'object') {
         updateStep('profile', 'error', 'Dữ liệu profile không hợp lệ');
-        terminalLogger.error('PROFILE', 'Invalid profile data format');
+        optimizedLogger.error('PROFILE', 'Invalid profile data format');
         setError({
           type: 'access',
           message: 'Dữ liệu tài khoản không hợp lệ',
@@ -468,7 +520,7 @@ export function LoginForm() {
         const errorMessage = profile.message as string;
         
         updateStep('profile', 'error', `${errorCode}: ${errorMessage}`);
-        terminalLogger.warn('PROFILE', 'Profile request failed', { 
+        optimizedLogger.warn('PROFILE', 'Profile request failed', { 
           error: errorCode, 
           message: errorMessage 
         });
@@ -476,7 +528,7 @@ export function LoginForm() {
         // Handle specific error cases with better user experience
         switch (errorCode) {
           case 'USER_PROFILE_NOT_FOUND':
-            terminalLogger.info('PROFILE', 'Profile không tồn tại - thử tạo tự động');
+            optimizedLogger.info('PROFILE', 'Profile không tồn tại - thử tạo tự động');
             
             // Try to create profile automatically
             try {
@@ -495,7 +547,7 @@ export function LoginForm() {
                 });
               
               if (createProfileResult.error) {
-                terminalLogger.error('PROFILE', 'Không thể tạo profile tự động', createProfileResult.error);
+                optimizedLogger.error('PROFILE', 'Không thể tạo profile tự động', createProfileResult.error);
                 setError({
                   type: 'access',
                   message: 'Tài khoản chưa được thiết lập đầy đủ',
@@ -505,18 +557,18 @@ export function LoginForm() {
                 });
                 return;
               } else {
-                terminalLogger.success('PROFILE', 'Tạo profile thành công - tiếp tục login');
+                optimizedLogger.success('PROFILE', 'Tạo profile thành công - tiếp tục login');
                 updateStep('profile', 'completed', 'Đã tạo profile thành công');
                 // Continue with basic redirect
                 updateStep('business', 'completed', 'Profile mới tạo - skip business check');
                 updateStep('permissions', 'completed', 'Profile mới tạo - role staff');
                 updateStep('redirect', 'processing', 'Chuyển hướng dashboard');
-                terminalLogger.success('LOGIN', 'Đăng nhập thành công với profile mới');
+                optimizedLogger.success('LOGIN', 'Đăng nhập thành công với profile mới');
                 router.push('/dashboard');
                 return;
               }
             } catch (createError) {
-              terminalLogger.error('PROFILE', 'Exception khi tạo profile', createError);
+              optimizedLogger.error('PROFILE', 'Exception khi tạo profile', createError);
               setError({
                 type: 'access',
                 message: 'Không thể tạo profile tự động',
@@ -529,7 +581,7 @@ export function LoginForm() {
             
           case 'NO_BUSINESS_ASSIGNED':
             updateStep('business', 'error', 'Chưa được gán doanh nghiệp');
-            terminalLogger.info('BUSINESS', 'Không có business được gán');
+            optimizedLogger.info('BUSINESS', 'Không có business được gán');
             setError({
               type: 'access',
               message: 'Tài khoản chưa được gán vào doanh nghiệp',
@@ -589,21 +641,90 @@ export function LoginForm() {
       updateStep('business', 'completed', `Business: ${businessName} (${subscriptionStatus})`);
       updateStep('permissions', 'completed', `Role: ${userRole} (${Object.keys(permissionsObj || {}).length} permissions)`);
 
+      // **TÍCH HỢP SESSION CACHE** - Cache session sau khi đăng nhập thành công
+      try {
+        // Tạo complete session object từ enhanced profile data theo đúng interface
+        const completeSession: CompleteUserSession = {
+          success: true,
+          profile_exists: true,
+          user: {
+            id: user.id,
+            profile_id: user.id, // Same as user ID
+            email: user.email || emailTrimmed,
+            role: userRole || 'staff',
+            full_name: (userObj?.full_name as string) || user.email?.split('@')[0] || 'User',
+            phone: (userObj?.phone as string) || null,
+            login_method: emailTrimmed.includes('@') ? 'email' : 'phone',
+            status: (userObj?.status as string) || 'active'
+          },
+          business: {
+            id: businessId,
+            name: businessName || 'Unknown Business',
+            business_type: (businessObj?.business_type as string) || 'unknown',
+            business_type_name: (businessObj?.business_type_name as string) || 'Unknown Type',
+            business_code: (businessObj?.business_code as string) || '',
+            contact_email: (businessObj?.contact_email as string) || null,
+            contact_phone: (businessObj?.contact_phone as string) || null,
+            address: (businessObj?.address as string) || null,
+            subscription_tier: (businessObj?.subscription_tier as string) || 'basic',
+            subscription_status: subscriptionStatus || 'unknown',
+            trial_end_date: (businessObj?.trial_end_date as string) || null,
+            features_enabled: (businessObj?.features_enabled as Record<string, unknown>) || {},
+            usage_stats: (businessObj?.usage_stats as Record<string, unknown>) || {},
+            status: (businessObj?.status as string) || 'active'
+          },
+          permissions: permissionsObj as Record<string, unknown> || {},
+          session_info: {
+            login_time: new Date().toISOString(),
+            user_agent: userAgent
+          }
+        };
+
+        // Cache session 
+        SessionCacheManager.cacheSession(completeSession);
+        optimizedLogger.success('CACHE', 'Session được cache thành công', {
+          userId: user.id,
+          businessId,
+          loginTime: completeSession.session_info.login_time
+        });
+      } catch (cacheError) {
+        // Cache error không làm crash login flow
+        optimizedLogger.warn('CACHE', 'Không thể cache session, tiếp tục đăng nhập bình thường', cacheError);
+      }
+
       // Step 4: Successful login - redirect to dashboard
       updateStep('redirect', 'processing', 'Chuyển hướng tới dashboard');
-      terminalLogger.success('LOGIN', 'Đăng nhập thành công - chuyển hướng dashboard', {
+      optimizedLogger.success('LOGIN', 'Đăng nhập thành công - chuyển hướng dashboard', {
         businessId,
         businessName,
         role: userRole,
         subscriptionStatus,
-        permissionsCount: Object.keys(permissionsObj || {}).length
+        permissionsCount: Object.keys(permissionsObj || {}).length,
+        sessionCached: true
+      });
+      
+      // Log successful login với professional logger
+      const sessionId = (authData as { session?: { access_token: string } })?.session?.access_token || '';
+      
+      await authLogger.loginSuccess({
+        user_id: user.id,
+        email: user.email,
+        business_id: businessId,
+        role: userRole || 'unknown',
+        login_method: emailTrimmed.includes('@') ? 'email' : 'phone',
+        is_first_login: false // TODO: Determine if first login
+      }, {
+        session_id: sessionId,
+        ip_address: ipAddress,
+        user_agent: userAgent,
+        expires_at: (authData as { session?: { expires_at?: string } })?.session?.expires_at
       });
       
       router.push('/dashboard');
 
     } catch (error) {
       updateStep(currentStep || 'unknown', 'error', 'Lỗi không mong muốn');
-      terminalLogger.error('LOGIN', 'Lỗi không mong muốn trong quá trình đăng nhập', error);
+      optimizedLogger.error('LOGIN', 'Lỗi không mong muốn trong quá trình đăng nhập', error);
       const loginError = classifyError(error);
       setError(loginError);
     } finally {

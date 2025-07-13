@@ -439,11 +439,6 @@ export function LoginForm() {
   // ==================================================================================
   // UI COMPONENTS
   // ==================================================================================
-  const createProfileAction = () => {
-    LoginLogger.log('info', 'ACTION', 'Người dùng chọn tạo profile');
-    router.push('/auth/sign-up');
-  };
-
   const exportLogs = () => {
     const logs = LoginLogger.exportLogs();
     const blob = new Blob([logs], { type: 'application/json' });

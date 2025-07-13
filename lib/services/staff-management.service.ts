@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { businessLogger, setLoggerContext, logger } from '@/lib/logger'
 import { z } from 'zod'
 
 // Types for staff management
@@ -55,43 +56,90 @@ class StaffManagementService {
   // Get all staff members for current business
   async getStaffMembers(): Promise<{ data: StaffMember[] | null; error: string | null }> {
     try {
-      const { data: profile } = await this.supabase
-        .from('pos_mini_modular3_user_profiles')
-        .select('business_id')
-        .eq('id', (await this.supabase.auth.getUser()).data.user?.id)
-        .single()
+      // 🚀 Performance tracking
+      return await businessLogger.performanceTrack(
+        'GET_STAFF_MEMBERS',
+        { business_id: '', user_id: '' }, // Will be set from context
+        async () => {
+          const { data: profile } = await this.supabase
+            .from('pos_mini_modular3_user_profiles')
+            .select('business_id')
+            .eq('id', (await this.supabase.auth.getUser()).data.user?.id)
+            .single()
 
-      if (!profile?.business_id) {
-        return { data: null, error: 'Không tìm thấy thông tin hộ kinh doanh' }
-      }
+          if (!profile?.business_id) {
+            await logger.warn(
+              'BUSINESS',
+              'STAFF_ACCESS_NO_BUSINESS',
+              'Attempt to access staff without business context',
+              { user_id: (await this.supabase.auth.getUser()).data.user?.id }
+            )
+            return { data: null, error: 'Không tìm thấy thông tin hộ kinh doanh' }
+          }
 
-      const { data, error } = await this.supabase
-        .from('pos_mini_modular3_user_profiles')
-        .select(`
-          id,
-          full_name,
-          email,
-          phone,
-          role,
-          status,
-          employee_id,
-          hire_date,
-          last_login_at,
-          created_at,
-          avatar_url
-        `)
-        .eq('business_id', profile.business_id)
-        .neq('role', 'household_owner') // Exclude business owner
-        .order('created_at', { ascending: false })
+          // Set logging context
+          setLoggerContext({
+            business_id: profile.business_id,
+            user_id: (await this.supabase.auth.getUser()).data.user?.id || ''
+          })
 
-      if (error) {
-        console.error('Error fetching staff:', error)
-        return { data: null, error: 'Lỗi khi tải danh sách nhân viên' }
-      }
+          const { data, error } = await this.supabase
+            .from('pos_mini_modular3_user_profiles')
+            .select(`
+              id,
+              full_name,
+              email,
+              phone,
+              role,
+              status,
+              employee_id,
+              hire_date,
+              last_login_at,
+              created_at,
+              avatar_url
+            `)
+            .eq('business_id', profile.business_id)
+            .neq('role', 'household_owner') // Exclude business owner
+            .order('created_at', { ascending: false })
 
-      return { data: data as StaffMember[], error: null }
+          if (error) {
+            await logger.error(
+              'BUSINESS',
+              'STAFF_FETCH_ERROR',
+              'Lỗi khi tải danh sách nhân viên',
+              error,
+              {
+                business_id: profile.business_id,
+                error_code: error.code,
+                error_details: error.details
+              }
+            )
+            return { data: null, error: 'Lỗi khi tải danh sách nhân viên' }
+          }
+
+          // 📊 Log successful staff fetch
+          await logger.info(
+            'BUSINESS',
+            'STAFF_FETCHED',
+            'Tải danh sách nhân viên thành công',
+            {
+              business_id: profile.business_id,
+              staff_count: data?.length || 0,
+              active_count: data?.filter(s => s.status === 'active').length || 0
+            }
+          )
+
+          return { data: data as StaffMember[], error: null }
+        }
+      )
     } catch (error) {
-      console.error('Error in getStaffMembers:', error)
+      await logger.error(
+        'BUSINESS',
+        'STAFF_FETCH_CRITICAL_ERROR',
+        'Lỗi nghiêm trọng khi tải staff',
+        error as Error,
+        { error_message: (error as Error).message }
+      )
       return { data: null, error: 'Lỗi hệ thống' }
     }
   }
@@ -165,13 +213,48 @@ class StaffManagementService {
       )
 
       if (error) {
-        console.error('Error inviting staff:', error)
+        await logger.error(
+          'BUSINESS',
+          'STAFF_INVITE_ERROR',
+          'Lỗi khi mời nhân viên',
+          error,
+          {
+            business_id: profile.business_id,
+            target_email: validatedInput.email,
+            target_role: validatedInput.role,
+            error_code: error.code
+          }
+        )
         return { success: false, error: 'Lỗi khi gửi lời mời' }
       }
 
       if (!data?.success) {
+        await logger.warn(
+          'BUSINESS',
+          'STAFF_INVITE_FAILED',
+          'Mời nhân viên thất bại',
+          {
+            business_id: profile.business_id,
+            target_email: validatedInput.email,
+            target_role: validatedInput.role,
+            failure_reason: data?.error
+          }
+        )
         return { success: false, error: data?.error || 'Không thể gửi lời mời' }
       }
+
+      // 📊 Log successful invitation
+      await logger.info(
+        'BUSINESS',
+        'STAFF_INVITED',
+        'Mời nhân viên thành công',
+        {
+          business_id: profile.business_id,
+          target_email: validatedInput.email,
+          target_role: validatedInput.role,
+          invited_by: (await this.supabase.auth.getUser()).data.user?.id
+        }
+      )
 
       return { success: true }
     } catch (error) {
