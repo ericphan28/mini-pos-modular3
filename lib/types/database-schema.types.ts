@@ -47,14 +47,14 @@ export interface DatabaseTables {
     id: string;
     name: string;
     code: string; // Auto-generated unique code (GKS00001)
-    business_type: BusinessType;
+    business_type: BusinessTypeEnum;
     phone?: string;
     email?: string;
     address?: string;
     tax_code?: string;
     legal_representative?: string;
     logo_url?: string;
-    status: BusinessStatus;
+    status: BusinessStatusEnum;
     settings?: Record<string, unknown>;
     trial_ends_at: string;
     max_users: number;
@@ -110,20 +110,20 @@ export type UserStatus = 'active' | 'inactive' | 'suspended';
 
 export type ContactMethod = 'email' | 'phone';
 
-export type BusinessType = 
+export type BusinessTypeEnum = 
   | 'retail'     // Bán lẻ
   | 'restaurant' // Nhà hàng
   | 'service'    // Dịch vụ  
   | 'wholesale'; // Bán sỉ
 
-export type BusinessStatus = 
+export type BusinessStatusEnum = 
   | 'trial'     // Đang dùng thử
   | 'active'    // Hoạt động
   | 'suspended' // Tạm ngưng
   | 'closed';   // Đã đóng
 
-export type SubscriptionTier = 'free' | 'basic' | 'premium';
-export type SubscriptionStatus = 'trial' | 'active' | 'past_due' | 'cancelled';
+export type SubscriptionTier = 'free' | 'basic' | 'premium' | 'enterprise';
+export type SubscriptionStatus = 'trial' | 'active' | 'past_due' | 'cancelled' | 'suspended' | 'expired';
 
 // =============================================
 // DATABASE FUNCTIONS REGISTRY
@@ -181,7 +181,7 @@ export interface DatabaseFunctions {
 
   'get_default_business_settings': {
     Args: {
-      p_business_type: BusinessType;
+      p_business_type: BusinessTypeEnum;
       p_subscription_tier: SubscriptionTier;
     };
     Returns: {
@@ -202,9 +202,9 @@ export interface DatabaseFunctions {
       p_contact_method: ContactMethod;
       p_contact_value: string;
       p_owner_name: string;
-      p_business_type: BusinessType;
+      p_business_type: BusinessTypeEnum;
       p_subscription_tier: SubscriptionTier;
-      p_business_status: BusinessStatus;
+      p_business_status: BusinessStatusEnum;
       p_subscription_status: SubscriptionStatus;
       p_password?: string | null;
       p_created_by_admin?: string | null;
@@ -323,9 +323,9 @@ export interface BusinessRegistrationData {
   contact_method: ContactMethod;
   contact_value: string;
   owner_full_name: string;
-  business_type: BusinessType;
+  business_type: BusinessTypeEnum;
   subscription_tier: SubscriptionTier;
-  business_status: BusinessStatus;
+  business_status: BusinessStatusEnum;
   subscription_status: SubscriptionStatus;
   set_password?: string | null;
 }
@@ -386,7 +386,7 @@ export interface VietnameseBusinessData {
   business_name: string; // Tên hộ kinh doanh
   owner_full_name: string; // Tên chủ hộ
   contact_value: string; // Email hoặc số điện thoại
-  business_type: BusinessType; // Loại hình kinh doanh
+  business_type: BusinessTypeEnum; // Loại hình kinh doanh
 }
 
 export default DatabaseFunctions;

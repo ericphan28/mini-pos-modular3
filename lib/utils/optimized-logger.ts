@@ -48,7 +48,7 @@ export class OptimizedTerminalLogger {
     let dataStr: string;
     try {
       dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-    } catch (_error: unknown) {
+    } catch {
       dataStr = '[Circular or non-serializable data]';
     }
     

@@ -1,6 +1,4 @@
-export type SubscriptionTier = 'free' | 'basic' | 'premium';
-
-export type SubscriptionStatus = 'trial' | 'active' | 'past_due' | 'cancelled';
+import type { SubscriptionTier, SubscriptionStatus } from './database.types'
 
 export interface SubscriptionPlan {
   id: string;

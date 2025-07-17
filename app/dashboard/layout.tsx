@@ -43,21 +43,6 @@ function getCachedDashboardAuth(): User | null {
   }
 }
 
-function cacheDashboardAuth(user: User, source: 'session_cache' | 'rpc_call'): void {
-  if (typeof window === 'undefined') return;
-  
-  try {
-    const cache: DashboardAuthCache = {
-      user,
-      timestamp: Date.now(),
-      source
-    };
-    localStorage.setItem(DASHBOARD_AUTH_CACHE_KEY, JSON.stringify(cache));
-  } catch {
-    // Ignore cache errors
-  }
-}
-
 export default function DashboardLayout({
   children,
 }: {

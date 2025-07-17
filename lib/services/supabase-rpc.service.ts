@@ -9,13 +9,13 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/client';
 import type {
-  AppError,
+  ServiceResponse,
   DatabaseError,
+  AppError,
   DatabaseFunctionName,
   DatabaseFunctionParams,
-  DatabaseFunctionResult,
-  ServiceResponse
-} from '@/lib/types/database-schema.types';
+  DatabaseFunctionResult
+} from '@/lib/types';
 
 // =============================================
 // TYPE-SAFE RPC WRAPPER
@@ -373,9 +373,9 @@ export const businessService = BusinessService.getInstance();
 export type { AppError, DatabaseError, ServiceResponse };
 
 // Re-export for convenience
-    export {
-    type DatabaseFunctionName,
-    type DatabaseFunctionParams,
-    type DatabaseFunctionResult
-  } from '@/lib/types/database-schema.types';
+export {
+  type DatabaseFunctionName,
+  type DatabaseFunctionParams,
+  type DatabaseFunctionResult
+} from '@/lib/types';
 

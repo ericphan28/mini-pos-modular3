@@ -21,6 +21,30 @@ interface LoginError {
   };
 }
 
+interface AuthSuccess {
+  success: true;
+  user: { id: string; email?: string };
+}
+
+interface AuthFailure {
+  success: false;
+  error: LoginError;
+}
+
+type AuthResult = AuthSuccess | AuthFailure;
+
+interface ProfileSuccess {
+  success: true;
+  profileData?: unknown;
+}
+
+interface ProfileFailure {
+  success: false;
+  error: LoginError;
+}
+
+type ProfileResult = ProfileSuccess | ProfileFailure;
+
 // ==================================================================================
 // HỆ THỐNG LOG NÂNG CAO
 // ==================================================================================
@@ -127,7 +151,7 @@ export function LoginForm() {
   // ==================================================================================
   // BƯỚC 2: XÁC THỰC SUPABASE AUTH
   // ==================================================================================
-  const authenticateUser = async (emailTrimmed: string, password: string) => {
+  const authenticateUser = async (emailTrimmed: string, password: string): Promise<AuthResult> => {
     LoginLogger.log('info', 'AUTH', 'Bắt đầu xác thực với Supabase Auth');
     setLoginStep('Đang xác thực...');
     
@@ -208,7 +232,7 @@ export function LoginForm() {
   // ==================================================================================
   // BƯỚC 3: KIỂM TRA PROFILE NGƯỜI DÙNG
   // ==================================================================================
-  const checkUserProfile = async (userId: string) => {
+  const checkUserProfile = async (userId: string): Promise<ProfileResult> => {
     LoginLogger.log('info', 'PROFILE', 'Bắt đầu kiểm tra profile người dùng');
     setLoginStep('Đang tải thông tin tài khoản...');
     
@@ -354,7 +378,7 @@ export function LoginForm() {
           success: true,
           profileData: {
             success: true,
-            user: { id: userId, ...basicProfileResult.data },
+            user: { ...basicProfileResult.data, id: userId },
             fallbackMode: true
           }
         };

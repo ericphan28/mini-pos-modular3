@@ -1,6 +1,8 @@
 import { businessLogger, setLoggerContext } from '@/lib/logger';
 import { createClient } from '@/lib/supabase/client';
 
+type SupabaseClient = ReturnType<typeof createClient>;
+
 interface ProductData {
   readonly name: string;
   readonly price: number;
@@ -15,7 +17,7 @@ interface UserContext {
 }
 
 export class BusinessService {
-  private supabase = createClient();
+  private supabase: SupabaseClient = createClient();
 
   public async createProduct(
     productData: ProductData,
