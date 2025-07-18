@@ -4,6 +4,7 @@ import { LogoutButton } from "@/components/logout-button";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+// import { useAuthEvents } from "@/hooks/use-auth-events"; // DISABLED - Using React Context pattern
 import {
   BarChart3,
   Bell,
@@ -51,9 +52,13 @@ const navItems: NavItem[] = [
 ];
 
 export default function DashboardLayoutClient({ children, user }: DashboardLayoutClientProps) {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // const [sidebarOpen, setSidebarOpen] = useState(false); // Unused - removed
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
+
+  // Enable cross-tab authentication events - DISABLED (Using React Context pattern)
+  // useAuthEvents(user.id);
 
   // Check if current path is active
   const isActive = useCallback((href: string) => {

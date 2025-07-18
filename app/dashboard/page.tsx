@@ -2,6 +2,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { createClient } from '@/lib/supabase/server';
+import { businessLogger, setLoggerContext } from '@/lib/logger';
 import {
   AlertCircle,
   BarChart3,
@@ -18,86 +19,149 @@ import { redirect } from 'next/navigation';
 
 // Define proper types
 interface ProfileData {
-  profile_exists?: boolean;
-  profile?: {
-    business_id?: string;
-    role?: string;
-    full_name?: string;
-    [key: string]: unknown;
+  readonly profile_exists?: boolean;
+  readonly profile?: {
+    readonly business_id?: string;
+    readonly role?: string;
+    readonly full_name?: string;
+    readonly [key: string]: unknown;
   };
-  business?: {
-    id?: string;
-    name?: string;
-    business_type?: string;
-    status?: string;
-    subscription_tier?: string;
-    [key: string]: unknown;
+  readonly business?: {
+    readonly id?: string;
+    readonly name?: string;
+    readonly business_type?: string;
+    readonly status?: string;
+    readonly subscription_tier?: string;
+    readonly [key: string]: unknown;
   };
   // Legacy fields for backward compatibility
-  business_id?: string;
-  business_name?: string;
-  business_type?: string;
-  status?: string;
-  subscription_tier?: string;
-  role?: string;
-  full_name?: string;
-  error?: string;
+  readonly business_id?: string;
+  readonly business_name?: string;
+  readonly business_type?: string;
+  readonly status?: string;
+  readonly subscription_tier?: string;
+  readonly role?: string;
+  readonly full_name?: string;
+  readonly error?: string;
 }
 
 interface RPCResult {
-  data: ProfileData | null;
-  error: Error | null;
+  readonly data: ProfileData | null;
+  readonly error: Error | null;
+}
+
+interface BusinessStats {
+  readonly totalProducts: number;
+  readonly totalSales: number;
+  readonly totalCustomers: number;
+  readonly monthlyRevenue: number;
+  readonly dailySales: number;
+  readonly pendingOrders: number;
+  readonly lowStockItems: number;
+  readonly activeStaff: number;
+}
+
+interface QuickStat {
+  readonly title: string;
+  readonly value: string;
+  readonly icon: React.ComponentType<{ className?: string }>;
+  readonly color: string;
+  readonly bgColor: string;
+  readonly trend: string;
+}
+
+interface QuickAction {
+  readonly title: string;
+  readonly description: string;
+  readonly href: string;
+  readonly icon: React.ComponentType<{ className?: string }>;
+  readonly color: string;
 }
 
 export default async function DashboardPage() {
+  // Set initial logger context for dashboard page
+  setLoggerContext({
+    session_id: `dashboard_page_${Date.now()}`
+  });
+
   const supabase = await createClient();
 
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await businessLogger.performanceTrack(
+    'AUTH_GET_USER',
+    { business_id: 'system', user_id: 'unknown' },
+    () => supabase.auth.getUser(),
+    { component: 'dashboard_page' }
+  );
 
   if (!user) {
-    return redirect('/auth/login');
+    redirect('/auth/login');
   }
+
+  // Update logger context with user info
+  setLoggerContext({
+    user_id: user.id,
+    session_id: `dashboard_page_${Date.now()}`
+  });
 
   // ✅ Get user profile for business dashboard access
   let profileData: ProfileData | null = null;
   let rpcError: Error | null = null;
   
   try {
-    const result = await supabase.rpc(
-      'pos_mini_modular3_get_user_profile_safe',
-      { p_user_id: user.id }
-    ) as RPCResult;
+    const result = await businessLogger.performanceTrack(
+      'GET_USER_PROFILE_SAFE',
+      { business_id: 'unknown', user_id: user.id },
+      async () => {
+        const rpcResult = await supabase.rpc(
+          'pos_mini_modular3_get_user_profile_safe',
+          { p_user_id: user.id }
+        );
+        return rpcResult as RPCResult;
+      },
+      { user_id: user.id, component: 'dashboard_page' }
+    );
     
     profileData = result.data;
     rpcError = result.error;
 
-    // Debug: Log the entire structure
-    if (profileData) {
-      console.log('🔍 [DASHBOARD-DEBUG] ProfileData structure:', JSON.stringify(profileData, null, 2));
-      console.log('🔍 [DASHBOARD-DEBUG] Profile object:', profileData.profile);
-      console.log('🔍 [DASHBOARD-DEBUG] Business object:', profileData.business);
-      console.log('🔍 [DASHBOARD-DEBUG] Legacy business_id:', profileData.business_id);
+    // Log only essential info in development mode
+    if (process.env.NODE_ENV === 'development' && profileData) {
+      businessLogger.performanceTrack(
+        'DEBUG_PROFILE_VALIDATION',
+        { business_id: 'unknown', user_id: user.id },
+        async () => {
+          const debugInfo = {
+            success: !!profileData,
+            hasProfile: profileData?.profile_exists,
+            businessId: profileData?.profile?.business_id || profileData?.business_id,
+            businessName: profileData?.business?.name || profileData?.business_name,
+            role: profileData?.profile?.role || profileData?.role
+          };
+          // Use business logger instead of console.log
+          return debugInfo;
+        },
+        { debug_mode: true }
+      );
     }
 
-    console.log("📊 [DASHBOARD] RPC Profile result:", {
-      success: !!profileData,
-      hasProfile: profileData?.profile_exists,
-      businessId: profileData?.profile?.business_id || profileData?.business_id,
-      businessName: profileData?.business?.name || profileData?.business_name,
-      role: profileData?.profile?.role || profileData?.role,
-      error: rpcError?.message
-    });
-
-  } catch (error) {
-    console.error("❌ [DASHBOARD] RPC call failed:", error);
+  } catch (error: unknown) {
     rpcError = error instanceof Error ? error : new Error('Unknown error');
+    
+    // Log error through business logger instead of console.error
+    await businessLogger.performanceTrack(
+      'RPC_ERROR_HANDLING',
+      { business_id: 'unknown', user_id: user.id },
+      async () => {
+        throw rpcError;
+      },
+      { error_type: 'rpc_call_failed' }
+    );
   }
 
   // Handle RPC errors
   if (rpcError) {
-    console.error("❌ [DASHBOARD] RPC Error:", rpcError);
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Card className="w-full max-w-md">
@@ -122,79 +186,122 @@ export default async function DashboardPage() {
 
   // Check profile existence
   if (!profileData?.profile_exists) {
-    console.log("❌ [DASHBOARD] No profile found, redirecting to sign-up");
-    return redirect('/auth/sign-up');
+    redirect('/auth/sign-up');
   }
 
-  // Extract data from new structure
-  const businessId = profileData?.profile?.business_id || profileData?.business_id;
-  const businessName = profileData?.business?.name || profileData?.business_name;
-  const userRole = profileData?.profile?.role || profileData?.role;
-  const fullName = profileData?.profile?.full_name || profileData?.full_name;
-  const businessStatus = profileData?.business?.status || profileData?.status || 'active';
+  // Extract data from new structure with performance tracking
+  const businessContext = await businessLogger.performanceTrack(
+    'EXTRACT_BUSINESS_DATA',
+    { business_id: 'unknown', user_id: user.id },
+    async () => {
+      const businessId = profileData?.profile?.business_id || profileData?.business_id;
+      const businessName = profileData?.business?.name || profileData?.business_name;
+      const userRole = profileData?.profile?.role || profileData?.role;
+      const fullName = profileData?.profile?.full_name || profileData?.full_name;
+      const businessStatus = profileData?.business?.status || profileData?.status || 'active';
+      
+      return {
+        businessId,
+        businessName,
+        userRole,
+        fullName,
+        businessStatus
+      };
+    },
+    { component: 'data_extraction' }
+  );
+
+  const { businessId, businessName, userRole, fullName, businessStatus } = businessContext;
 
   // Check business membership
   if (!businessId) {
-    console.log("❌ [DASHBOARD] No business found, redirecting to business creation");
-    return redirect('/auth/sign-up?step=business');
+    redirect('/auth/sign-up?step=business');
   }
 
-  console.log("✅ [DASHBOARD] Dashboard access granted:", {
-    businessId: businessId,
-    businessName: businessName,
-    role: userRole
+  // Update logger context with business info
+  setLoggerContext({
+    user_id: user.id,
+    business_id: businessId,
+    session_id: `dashboard_page_${Date.now()}`
   });
 
-  // Get business statistics (mock data for now)
-  const businessStats = {
-    totalProducts: 0,
-    totalSales: 0,
-    totalCustomers: 0,
-    monthlyRevenue: 0,
-    dailySales: 0,
-    pendingOrders: 0,
-    lowStockItems: 0,
-    activeStaff: 1
-  };
+  // Success logging through business logger
+  await businessLogger.performanceTrack(
+    'DASHBOARD_ACCESS_GRANTED',
+    { business_id: businessId, user_id: user.id },
+    async () => ({
+      businessId: businessId,
+      businessName: businessName,
+      role: userRole
+    }),
+    { access_level: 'dashboard_full' }
+  );
 
-  // Quick stats cards data
-  const quickStats = [
-    {
-      title: 'Doanh thu tháng',
-      value: businessStats.monthlyRevenue.toLocaleString() + ' ₫',
-      icon: DollarSign,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50',
-      trend: '+12%'
+  // Get business statistics with performance tracking
+  const businessStats: BusinessStats = await businessLogger.performanceTrack(
+    'LOAD_BUSINESS_STATS',
+    { business_id: businessId, user_id: user.id },
+    async () => {
+      // TODO: Replace with actual database queries
+      return {
+        totalProducts: 0,
+        totalSales: 0,
+        totalCustomers: 0,
+        monthlyRevenue: 0,
+        dailySales: 0,
+        pendingOrders: 0,
+        lowStockItems: 0,
+        activeStaff: 1
+      };
     },
-    {
-      title: 'Đơn hàng hôm nay',
-      value: businessStats.dailySales.toString(),
-      icon: ShoppingCart,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50',
-      trend: '+5%'
+    { data_source: 'mock_data' }
+  );
+
+  // Quick stats cards data with performance tracking
+  const quickStats: QuickStat[] = await businessLogger.performanceTrack(
+    'GENERATE_QUICK_STATS',
+    { business_id: businessId, user_id: user.id },
+    async () => {
+      return [
+        {
+          title: 'Doanh thu tháng',
+          value: businessStats.monthlyRevenue.toLocaleString() + ' ₫',
+          icon: DollarSign,
+          color: 'text-green-600',
+          bgColor: 'bg-green-50',
+          trend: '+12%'
+        },
+        {
+          title: 'Đơn hàng hôm nay',
+          value: businessStats.dailySales.toString(),
+          icon: ShoppingCart,
+          color: 'text-blue-600',
+          bgColor: 'bg-blue-50',
+          trend: '+5%'
+        },
+        {
+          title: 'Sản phẩm',
+          value: businessStats.totalProducts.toString(),
+          icon: Package,
+          color: 'text-purple-600',
+          bgColor: 'bg-purple-50',
+          trend: 'Mới'
+        },
+        {
+          title: 'Nhân viên',
+          value: businessStats.activeStaff.toString(),
+          icon: Users,
+          color: 'text-orange-600',
+          bgColor: 'bg-orange-50',
+          trend: 'Hoạt động'
+        }
+      ];
     },
-    {
-      title: 'Sản phẩm',
-      value: businessStats.totalProducts.toString(),
-      icon: Package,
-      color: 'text-purple-600',
-      bgColor: 'bg-purple-50',
-      trend: 'Mới'
-    },
-    {
-      title: 'Nhân viên',
-      value: businessStats.activeStaff.toString(),
-      icon: Users,
-      color: 'text-orange-600',
-      bgColor: 'bg-orange-50',
-      trend: 'Hoạt động'
-    }
-  ];
+    { stats_count: 4 }
+  );
 
   // Quick actions
-  const quickActions = [
+  const quickActions: QuickAction[] = [
     {
       title: 'Quản lý sản phẩm',
       description: 'Thêm, sửa, xóa sản phẩm',

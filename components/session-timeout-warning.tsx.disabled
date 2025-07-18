@@ -1,0 +1,181 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { AlertTriangle, Clock, RefreshCw, X } from 'lucide-react';
+import { Button } from './ui/button';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { sessionManager } from '@/lib/session';
+import { useRouter } from 'next/navigation';
+
+interface SessionTimeoutWarningProps {
+  readonly userId: string;
+  readonly onExtendSession?: () => void;
+  readonly onLogout?: () => void;
+}
+
+export default function SessionTimeoutWarning({ 
+  userId, 
+  onExtendSession, 
+  onLogout 
+}: SessionTimeoutWarningProps) {
+  const router = useRouter();
+  const [isVisible, setIsVisible] = useState(false);
+  const [minutesLeft, setMinutesLeft] = useState(0);
+  const [isExtending, setIsExtending] = useState(false);
+
+  useEffect(() => {
+    // Listen for session timeout warnings
+    const handleTimeoutWarning = (event: CustomEvent): void => {
+      const { userId: warningUserId, minutesLeft: warningMinutes } = event.detail;
+      
+      if (warningUserId === userId) {
+        setMinutesLeft(warningMinutes);
+        setIsVisible(true);
+      }
+    };
+
+    // Listen for logout events from other tabs
+    const handleStorageEvent = (event: StorageEvent): void => {
+      if (event.key === 'pos_logout_broadcast' && event.newValue) {
+        try {
+          const logoutEvent = JSON.parse(event.newValue);
+          if (logoutEvent.type === 'LOGOUT' && logoutEvent.userId === userId) {
+            // Another tab logged out - redirect immediately
+            router.push('/auth/login');
+          }
+        } catch (error) {
+          console.error('Failed to parse logout broadcast:', error);
+        }
+      }
+    };
+
+    // Listen for BroadcastChannel events
+    let channel: BroadcastChannel | null = null;
+    if ('BroadcastChannel' in window) {
+      channel = new BroadcastChannel('pos_auth');
+      channel.addEventListener('message', (event) => {
+        if (event.data.type === 'LOGOUT' && event.data.userId === userId) {
+          router.push('/auth/login');
+        }
+      });
+    }
+
+    window.addEventListener('sessionTimeoutWarning', handleTimeoutWarning as EventListener);
+    window.addEventListener('storage', handleStorageEvent);
+
+    return () => {
+      window.removeEventListener('sessionTimeoutWarning', handleTimeoutWarning as EventListener);
+      window.removeEventListener('storage', handleStorageEvent);
+      if (channel) {
+        channel.close();
+      }
+    };
+  }, [userId, router]);
+
+  const handleExtendSession = async (): Promise<void> => {
+    setIsExtending(true);
+
+    try {
+      // Get current session
+      const session = await sessionManager.getValidSession(userId);
+      
+      if (session) {
+        // Refresh the session
+        const refreshedSession = await sessionManager.refreshSession(session.sessionId);
+        
+        if (refreshedSession) {
+          setIsVisible(false);
+          if (onExtendSession) {
+            onExtendSession();
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to extend session:', error);
+      // If refresh fails, show logout option
+    } finally {
+      setIsExtending(false);
+    }
+  };
+
+  const handleLogout = async (): Promise<void> => {
+    try {
+      await sessionManager.logout(userId);
+      
+      if (onLogout) {
+        onLogout();
+      }
+
+      router.push('/auth/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Force navigation even on error
+      router.push('/auth/login');
+    }
+  };
+
+  const handleDismiss = (): void => {
+    setIsVisible(false);
+  };
+
+  if (!isVisible) {
+    return null;
+  }
+
+  return (
+    <div className="fixed top-4 right-4 z-50 max-w-md">
+      <Alert className="border-orange-200 bg-orange-50 shadow-lg">
+        <AlertTriangle className="h-4 w-4 text-orange-600" />
+        <AlertTitle className="text-orange-800 flex items-center justify-between">
+          <span>Phiên làm việc sắp hết hạn</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDismiss}
+            className="h-auto p-1 text-orange-600 hover:text-orange-800"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </AlertTitle>
+        <AlertDescription className="text-orange-700 space-y-3">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            <span>
+              {minutesLeft > 1 
+                ? `Còn ${minutesLeft} phút trước khi hết phiên`
+                : 'Phiên làm việc sắp hết hạn'
+              }
+            </span>
+          </div>
+          
+          <div className="flex gap-2">
+            <Button
+              onClick={handleExtendSession}
+              disabled={isExtending}
+              size="sm"
+              className="bg-orange-600 hover:bg-orange-700 text-white"
+            >
+              {isExtending ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Đang gia hạn...
+                </>
+              ) : (
+                'Gia hạn phiên'
+              )}
+            </Button>
+            
+            <Button
+              onClick={handleLogout}
+              variant="outline"
+              size="sm"
+              className="border-orange-300 text-orange-700 hover:bg-orange-100"
+            >
+              Đăng xuất
+            </Button>
+          </div>
+        </AlertDescription>
+      </Alert>
+    </div>
+  );
+}

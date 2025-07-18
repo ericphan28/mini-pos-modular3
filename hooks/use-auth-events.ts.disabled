@@ -1,0 +1,153 @@
+'use client';
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { sessionManager } from '@/lib/session';
+
+/**
+ * Hook to handle cross-tab authentication events
+ * - Logout synchronization across tabs
+ * - Session timeout warnings
+ * - Auto logout on security events
+ */
+export function useAuthEvents(userId?: string) {
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!userId) return;
+
+    // Handle storage events for cross-tab synchronization
+    const handleStorageEvent = (event: StorageEvent): void => {
+      if (event.key === 'pos_logout_broadcast' && event.newValue) {
+        try {
+          const logoutEvent = JSON.parse(event.newValue);
+          if (logoutEvent.type === 'LOGOUT' && logoutEvent.userId === userId) {
+            // Another tab logged out - redirect immediately
+            console.log('Cross-tab logout detected, redirecting...');
+            router.push('/auth/login');
+            router.refresh();
+          }
+        } catch (error) {
+          console.error('Failed to parse logout broadcast:', error);
+        }
+      }
+    };
+
+    // Handle BroadcastChannel events
+    let channel: BroadcastChannel | null = null;
+    if ('BroadcastChannel' in window) {
+      channel = new BroadcastChannel('pos_auth');
+      channel.addEventListener('message', (event) => {
+        if (event.data.type === 'LOGOUT' && event.data.userId === userId) {
+          console.log('BroadcastChannel logout detected, redirecting...');
+          router.push('/auth/login');
+          router.refresh();
+        }
+      });
+    }
+
+    // Handle session timeout warnings
+    const handleTimeoutWarning = (event: CustomEvent): void => {
+      const { userId: warningUserId, minutesLeft } = event.detail;
+      
+      if (warningUserId === userId) {
+        console.log(`Session timeout warning: ${minutesLeft} minutes left`);
+        // SessionTimeoutWarning component will handle UI
+      }
+    };
+
+    // Auto logout on page visibility change if session is expired
+    const handleVisibilityChange = async (): Promise<void> => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const session = await sessionManager.getValidSession(userId);
+          if (!session) {
+            console.log('Session expired, redirecting to login...');
+            router.push('/auth/login');
+          }
+        } catch (error) {
+          console.error('Session validation error:', error);
+        }
+      }
+    };
+
+    // Add event listeners
+    window.addEventListener('storage', handleStorageEvent);
+    window.addEventListener('sessionTimeoutWarning', handleTimeoutWarning as EventListener);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('storage', handleStorageEvent);
+      window.removeEventListener('sessionTimeoutWarning', handleTimeoutWarning as EventListener);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      
+      if (channel) {
+        channel.close();
+      }
+    };
+  }, [userId, router]);
+}
+
+/**
+ * Hook to automatically logout user
+ */
+export function useLogout() {
+  const router = useRouter();
+
+  const logout = async (userId?: string): Promise<void> => {
+    try {
+      if (userId) {
+        await sessionManager.logout(userId);
+      } else {
+        // Try to get current session and logout
+        const session = await sessionManager.getValidSession();
+        if (session) {
+          await sessionManager.logout(session.userId);
+        }
+      }
+
+      // Navigate to login
+      router.push('/auth/login');
+      router.refresh();
+      
+    } catch (error) {
+      console.error('Logout error:', error);
+      
+      // Force navigation even on error for security
+      router.push('/auth/login');
+      router.refresh();
+    }
+  };
+
+  return { logout };
+}
+
+/**
+ * Hook to extend current session
+ */
+export function useSessionExtension() {
+  const extendSession = async (userId?: string): Promise<boolean> => {
+    try {
+      let session;
+      
+      if (userId) {
+        session = await sessionManager.getValidSession(userId);
+      } else {
+        session = await sessionManager.getValidSession();
+      }
+
+      if (session) {
+        const refreshedSession = await sessionManager.refreshSession(session.sessionId);
+        return !!refreshedSession;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('Session extension error:', error);
+      return false;
+    }
+  };
+
+  return { extendSession };
+}
