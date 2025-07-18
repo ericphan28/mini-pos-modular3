@@ -80,9 +80,10 @@ const AuthContextInstance = createContext<AuthContext | null>(null);
 // Auth provider component
 interface AuthProviderProps {
   readonly children: React.ReactNode;
+  readonly initialSessionData?: SessionData | null;
 }
 
-export function AuthProvider({ children }: AuthProviderProps) {
+export function AuthProvider({ children, initialSessionData }: AuthProviderProps) {
   const [state, dispatch] = useReducer(authReducer, initialState);
   const supabase = createClient();
 
@@ -121,35 +122,49 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Load complete session data
   const loadCompleteSession = useCallback(async (user: AuthUser): Promise<void> => {
     try {
-      // Load user profile
+      // Use the same RPC as dashboard for consistency
       const { data: profileData, error: profileError } = await supabase
-        .rpc('get_enhanced_user_profile', { user_id: user.id });
+        .rpc('pos_mini_modular3_get_user_profile_safe', { p_user_id: user.id });
 
-      if (profileError || !profileData.success) {
-        throw new Error('Failed to load user profile');
+      if (profileError) {
+        throw new Error(`Failed to load user profile: ${profileError.message}`);
       }
 
+      if (!profileData || profileData.error) {
+        throw new Error(profileData?.error || 'Profile data not available');
+      }
+
+      // Transform dashboard format to auth format
       const profile: UserProfile = {
         id: user.id,
-        fullName: profileData.profile.full_name || user.email || '',
+        fullName: profileData.profile?.full_name || profileData.full_name || user.email || '',
         email: user.email || '',
-        avatarUrl: profileData.profile.avatar_url,
-        phoneNumber: profileData.profile.phone_number,
-        timezone: profileData.profile.timezone,
+        avatarUrl: undefined,
+        phoneNumber: undefined,
+        timezone: undefined,
       };
 
+      const businessId = profileData.profile?.business_id || profileData.business_id;
+      const businessName = profileData.business?.name || profileData.business_name;
+      const businessStatus = profileData.business?.status || profileData.status;
+      const subscriptionTier = profileData.business?.subscription_tier || profileData.subscription_tier;
+
+      if (!businessId || !businessName) {
+        throw new Error('Business information not available');
+      }
+
       const business: BusinessContext = {
-        id: profileData.business.id,
-        name: profileData.business.name,
-        status: profileData.business.status,
-        subscriptionTier: profileData.business.subscription_tier,
-        subscriptionStatus: profileData.business.subscription_status,
+        id: businessId,
+        name: businessName,
+        status: (businessStatus as 'active' | 'inactive' | 'suspended') || 'active',
+        subscriptionTier: (subscriptionTier as 'basic' | 'premium' | 'enterprise') || 'basic',
+        subscriptionStatus: 'active',
       };
 
       const permissions: PermissionSet = {
-        role: profileData.permissions.role,
-        permissions: profileData.permissions.permissions || [],
-        features: profileData.permissions.features || [],
+        role: profileData.profile?.role || profileData.role || 'user',
+        permissions: [],
+        features: [],
       };
 
       const sessionData: SessionData = {
@@ -254,13 +269,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     const initializeSession = async (): Promise<void> => {
       try {
-        // Check cached session first
+        // 1. Use initial session data if provided (from server)
+        if (initialSessionData && mounted) {
+          dispatch({ type: 'SET_SESSION', payload: initialSessionData });
+          saveCachedSession(initialSessionData);
+          return; // Skip further initialization
+        }
+
+        // 2. Check cached session
         const cached = loadCachedSession();
         if (cached && mounted) {
           dispatch({ type: 'SET_SESSION', payload: cached });
         }
 
-        // Verify with Supabase
+        // 3. Verify with Supabase (only if no initial data)
         const { data: { user } } = await supabase.auth.getUser();
         if (user && mounted) {
           await loadCompleteSession(user as AuthUser);
@@ -282,7 +304,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => {
       mounted = false;
     };
-  }, [supabase.auth, loadCachedSession, loadCompleteSession, clearCachedSession]);
+  }, [supabase.auth, loadCachedSession, loadCompleteSession, clearCachedSession, initialSessionData, saveCachedSession]);
 
   // Activity tracking
   useEffect(() => {
