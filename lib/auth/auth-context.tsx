@@ -87,12 +87,30 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
   const [state, dispatch] = useReducer(authReducer, initialState);
   const supabase = createClient();
 
-  // Load session from cache
+  // Load session from cache with validation
   const loadCachedSession = useCallback((): SessionData | null => {
     try {
       const cached = localStorage.getItem('pos_session_data');
       if (cached) {
         const sessionData = JSON.parse(cached) as SessionData;
+        
+        // Validate session age (24 hours max)
+        const sessionAge = Date.now() - new Date(sessionData.loginTime).getTime();
+        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        
+        if (sessionAge > maxAge) {
+          console.warn('🔐 [AUTH CONTEXT] Cached session expired, clearing');
+          localStorage.removeItem('pos_session_data');
+          return null;
+        }
+        
+        // Validate business status
+        if (sessionData.business.status !== 'active') {
+          console.warn('🔐 [AUTH CONTEXT] Business not active in cache, clearing');
+          localStorage.removeItem('pos_session_data');
+          return null;
+        }
+        
         return sessionData;
       }
     } catch (error) {
@@ -119,74 +137,184 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
     }
   }, []);
 
-  // Load complete session data
-  const loadCompleteSession = useCallback(async (user: AuthUser): Promise<void> => {
+  // Load user session with permissions using existing database function
+  const loadUserSession = useCallback(async (user: AuthUser): Promise<void> => {
     try {
-      // Use the same RPC as dashboard for consistency
-      const { data: profileData, error: profileError } = await supabase
-        .rpc('pos_mini_modular3_get_user_profile_safe', { p_user_id: user.id });
+      console.log('🔐 [AUTH CONTEXT] Loading user session for:', user.id);
+      
+      // Call existing RPC function that includes complete user, business and permissions data
+      const { data: userData, error: profileError } = await supabase.rpc(
+        'pos_mini_modular3_get_user_with_business_complete',
+        { p_user_id: user.id }
+      );
+
+      console.log('🔐 [AUTH CONTEXT] RPC response:', { userData, profileError });
 
       if (profileError) {
-        throw new Error(`Failed to load user profile: ${profileError.message}`);
+        console.error('🔐 [AUTH CONTEXT] Profile error:', profileError);
+        throw new Error(`Profile error: ${profileError.message}`);
       }
 
-      if (!profileData || profileData.error) {
-        throw new Error(profileData?.error || 'Profile data not available');
+      if (!userData) {
+        console.error('🔐 [AUTH CONTEXT] No profile data returned');
+        throw new Error('No profile data returned');
       }
 
-      // Transform dashboard format to auth format
+      // Check if the response indicates success
+      if (!userData.success) {
+        console.error('🔐 [AUTH CONTEXT] User session load failed:', userData.error, userData.message);
+        throw new Error(userData.message || 'Failed to load user session');
+      }
+
+      // Extract user, business and permissions from the JSON response
+      const userInfo = userData.user;
+      const businessInfo = userData.business;
+      const permissionsInfo = userData.permissions || {};
+      const sessionInfo = userData.session_info || {};
+
+      console.log('🔐 [AUTH CONTEXT] Extracted data:', { userInfo, businessInfo, permissionsInfo });
+
+      // Validate required data - STRICT VALIDATION
+      if (!userInfo || !businessInfo) {
+        console.error('🔐 [AUTH CONTEXT] Missing required data:', { 
+          hasUserInfo: !!userInfo, 
+          hasBusinessInfo: !!businessInfo 
+        });
+        throw new Error('Thiếu thông tin user hoặc business từ database');
+      }
+
+      // Validate business ID exists
+      if (!businessInfo.id) {
+        console.error('🔐 [AUTH CONTEXT] Business ID không hợp lệ:', businessInfo);
+        throw new Error('User không có business ID hợp lệ');
+      }
+
+      // Validate business status - MUST be active
+      if (businessInfo.status !== 'active') {
+        console.error('🔐 [AUTH CONTEXT] Business không active:', { 
+          businessId: businessInfo.id,
+          currentStatus: businessInfo.status 
+        });
+        throw new Error(`Business không active. Status: ${businessInfo.status}`);
+      }
+
+      // Validate subscription status - ALIGN WITH ACTUAL DATA
+      if (businessInfo.subscription_status && !['active', 'trial'].includes(businessInfo.subscription_status)) {
+        console.error('🔐 [AUTH CONTEXT] Subscription không hợp lệ:', {
+          businessId: businessInfo.id,
+          subscriptionStatus: businessInfo.subscription_status
+        });
+        throw new Error(`Subscription không hợp lệ: ${businessInfo.subscription_status}`);
+      }
+
+      // Log actual business data for debugging
+      console.log('🔐 [AUTH CONTEXT] Business data validation:', {
+        businessId: businessInfo.id,
+        businessName: businessInfo.name,
+        actualSubscriptionTier: businessInfo.subscription_tier, // Should be 'free' not 'premium'
+        actualSubscriptionStatus: businessInfo.subscription_status, // Should be 'active'
+        businessStatus: businessInfo.status
+      });
+
+      // Build profile from the user object
       const profile: UserProfile = {
-        id: user.id,
-        fullName: profileData.profile?.full_name || profileData.full_name || user.email || '',
-        email: user.email || '',
-        avatarUrl: undefined,
-        phoneNumber: undefined,
-        timezone: undefined,
+        id: userInfo.profile_id || userInfo.id,
+        fullName: userInfo.full_name || '',
+        email: userInfo.email || user.email,
+        phoneNumber: userInfo.phone || undefined,
       };
 
-      const businessId = profileData.profile?.business_id || profileData.business_id;
-      const businessName = profileData.business?.name || profileData.business_name;
-      const businessStatus = profileData.business?.status || profileData.status;
-      const subscriptionTier = profileData.business?.subscription_tier || profileData.subscription_tier;
-
-      if (!businessId || !businessName) {
-        throw new Error('Business information not available');
-      }
+      // Build business context from the business object - MATCH ACTUAL DATABASE SCHEMA
+      // Map 'free' tier to 'basic' for compatibility while preserving original value
+      const actualTier = businessInfo.subscription_tier;
+      const mappedTier = actualTier === 'free' ? 'basic' : actualTier;
+      
+      console.log('🔐 [AUTH CONTEXT] Subscription tier mapping:', {
+        actual: actualTier,
+        mapped: mappedTier
+      });
 
       const business: BusinessContext = {
-        id: businessId,
-        name: businessName,
-        status: (businessStatus as 'active' | 'inactive' | 'suspended') || 'active',
-        subscriptionTier: (subscriptionTier as 'basic' | 'premium' | 'enterprise') || 'basic',
-        subscriptionStatus: 'active',
+        id: businessInfo.id,
+        name: businessInfo.name,
+        status: businessInfo.status as 'active' | 'inactive' | 'suspended',
+        subscriptionTier: mappedTier as 'basic' | 'premium' | 'enterprise',
+        subscriptionStatus: businessInfo.subscription_status as 'active' | 'expired' | 'canceled' | 'trial',
       };
 
+      console.log('🔐 [AUTH CONTEXT] Business context built:', {
+        id: business.id,
+        name: business.name,
+        actualTier: actualTier, // Original from database: 'free'
+        mappedTier: business.subscriptionTier, // For feature access: 'basic'
+        subscriptionStatus: business.subscriptionStatus,
+        businessStatus: business.status
+      });
+
+      // Build permissions with actual database structure
+      // Database returns: { "feature_name": { can_read: bool, can_write: bool, can_delete: bool, can_manage: bool } }
+      const features: string[] = [];
+      const permissionsList: string[] = [];
+
+      console.log('🔐 [AUTH CONTEXT] Raw permissions from database:', permissionsInfo);
+
+      Object.entries(permissionsInfo).forEach(([featureName, permissions]) => {
+        const perms = permissions as { can_read?: boolean; can_write?: boolean; can_delete?: boolean; can_manage?: boolean };
+        
+        console.log(`🔐 [AUTH CONTEXT] Processing feature: ${featureName}`, perms);
+        
+        // Add feature if user has any permission
+        if (perms.can_read || perms.can_write || perms.can_delete || perms.can_manage) {
+          features.push(featureName);
+        }
+
+        // Build permission strings in correct format (feature.action)
+        if (perms.can_read) permissionsList.push(`${featureName}.read`);
+        if (perms.can_write) permissionsList.push(`${featureName}.write`);
+        if (perms.can_delete) permissionsList.push(`${featureName}.delete`);
+        if (perms.can_manage) permissionsList.push(`${featureName}.manage`);
+      });
+
+      console.log('🔐 [AUTH CONTEXT] Processed permissions:', {
+        totalFeatures: features.length,
+        totalPermissions: permissionsList.length,
+        features: features,
+        permissions: permissionsList
+      });
+
       const permissions: PermissionSet = {
-        role: profileData.profile?.role || profileData.role || 'user',
-        permissions: [],
-        features: [],
+        role: userInfo.role || 'viewer',
+        permissions: permissionsList,
+        features: features,
       };
+
+      console.log('🔐 [AUTH CONTEXT] Built session objects:', { profile, business, permissions });
 
       const sessionData: SessionData = {
         user,
         profile,
         business,
         permissions,
-        loginTime: new Date().toISOString(),
+        loginTime: sessionInfo.login_time || new Date().toISOString(),
         lastActivity: new Date().toISOString(),
       };
+
+      console.log('🔐 [AUTH CONTEXT] Session data saved successfully');
 
       // Save to cache and state
       saveCachedSession(sessionData);
       dispatch({ type: 'SET_SESSION', payload: sessionData });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load session data';
+      console.error('🔐 [AUTH CONTEXT] Session load error:', { 
+        error: message, 
+        userId: user.id,
+        timestamp: new Date().toISOString() 
+      });
       dispatch({ type: 'SET_ERROR', payload: message });
       throw error;
     }
-  }, [supabase, saveCachedSession]);
-
-  // Login function
+  }, [supabase, saveCachedSession]);  // Login function
   const login = useCallback(async (email: string, password: string): Promise<void> => {
     try {
       dispatch({ type: 'SET_LOADING', payload: true });
@@ -203,13 +331,13 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
       }
 
       // Load complete session data
-      await loadCompleteSession(authData.user as AuthUser);
+      await loadUserSession(authData.user as AuthUser);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Login failed';
       dispatch({ type: 'SET_ERROR', payload: message });
       throw error;
     }
-  }, [supabase.auth, loadCompleteSession]);
+  }, [supabase.auth, loadUserSession]);
 
   // Logout function
   const logout = useCallback(async (): Promise<void> => {
@@ -232,15 +360,31 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
     }
   }, [supabase.auth, clearCachedSession]);
 
-  // Check permission
+  // Check permission - corrected to match database schema
   const checkPermission = useCallback((feature: string, action = 'read'): boolean => {
     if (!state.sessionData) return false;
     
     const { permissions } = state.sessionData;
-    const permissionKey = `${feature}:${action}`;
     
-    return permissions.permissions.includes(permissionKey) || 
-           permissions.features.includes(feature);
+    // Database uses format: "product_management.read", "staff_management.write", etc.
+    const permissionKey = `${feature}.${action}`;
+    
+    // Check explicit permission first
+    if (permissions.permissions.includes(permissionKey)) {
+      return true;
+    }
+    
+    // Fallback: if user has feature access and it's read action
+    if (action === 'read' && permissions.features.includes(feature)) {
+      return true;
+    }
+    
+    // Super admin or household_owner has all permissions
+    if (permissions.role === 'super_admin' || permissions.role === 'household_owner') {
+      return true;
+    }
+    
+    return false;
   }, [state.sessionData]);
 
   // Refresh session
@@ -248,7 +392,7 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        await loadCompleteSession(user as AuthUser);
+        await loadUserSession(user as AuthUser);
       } else {
         dispatch({ type: 'CLEAR_SESSION' });
       }
@@ -256,7 +400,7 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
       console.error('Session refresh failed:', error);
       dispatch({ type: 'CLEAR_SESSION' });
     }
-  }, [supabase.auth, loadCompleteSession]);
+  }, [supabase.auth, loadUserSession]);
 
   // Clear error
   const clearError = useCallback((): void => {
@@ -285,7 +429,7 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
         // 3. Verify with Supabase (only if no initial data)
         const { data: { user } } = await supabase.auth.getUser();
         if (user && mounted) {
-          await loadCompleteSession(user as AuthUser);
+          await loadUserSession(user as AuthUser);
         } else if (mounted) {
           clearCachedSession();
           dispatch({ type: 'CLEAR_SESSION' });
@@ -304,7 +448,7 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
     return () => {
       mounted = false;
     };
-  }, [supabase.auth, loadCachedSession, loadCompleteSession, clearCachedSession, initialSessionData, saveCachedSession]);
+  }, [supabase.auth, loadCachedSession, loadUserSession, clearCachedSession, initialSessionData, saveCachedSession]);
 
   // Activity tracking
   useEffect(() => {

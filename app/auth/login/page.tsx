@@ -11,19 +11,22 @@ export default function Page() {
   useEffect(() => {
     const startTime = performance.now();
     
-    // Page load tracking
-    optimizedLogger.info('PAGE_LOAD', 'Login page đã load', {
+    // Page load tracking với permission system info
+    optimizedLogger.info('PAGE_LOAD', 'Login page với Enhanced Permission System', {
       url: window.location.href,
       userAgent: navigator.userAgent,
       viewport: `${window.innerWidth}x${window.innerHeight}`,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      permissionSystem: 'enabled',
+      version: 'v2.0-permissions'
     });
 
     // Performance monitoring
     const loadTime = performance.now() - startTime;
     optimizedLogger.debug('PAGE_PERFORMANCE', 'Login page load performance', {
       loadTime: `${loadTime.toFixed(2)}ms`,
-      readyState: document.readyState
+      readyState: document.readyState,
+      permissionSystemEnabled: true
     });
 
     // Professional auth logger
@@ -37,14 +40,14 @@ export default function Page() {
 
     // Page visibility tracking
     const handleVisibilityChange = () => {
-      optimizedLogger.debug('PAGE_VISIBILITY', `Page ${document.hidden ? 'hidden' : 'visible'}`);
+      optimizedLogger.debug('PAGE_VISIBILITY', `Login page ${document.hidden ? 'hidden' : 'visible'} - Permission System Active`);
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      optimizedLogger.debug('PAGE_CLEANUP', 'Login page unmounted');
+      optimizedLogger.debug('PAGE_CLEANUP', 'Login page unmounted - Permission system cleanup');
     };
   }, []);
 
@@ -52,13 +55,15 @@ export default function Page() {
     optimizedLogger.info('NAVIGATION', 'User clicked Super Admin login', {
       from: '/auth/login',
       to: '/admin-login',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      permissionBypass: true
     });
   };
 
   return (
     <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
       <div className="w-full max-w-sm space-y-6">
+        {/* Enhanced Login Form - Keep existing detailed logging */}
         <LoginForm />
         
         {/* Super Admin Link */}
@@ -71,6 +76,14 @@ export default function Page() {
             <Shield className="w-4 h-4" />
             Đăng nhập Super Admin
           </Link>
+        </div>
+        
+        {/* Permission System Status */}
+        <div className="text-center">
+          <p className="text-xs text-muted-foreground">
+            🔐 Permission System v2.0 | 
+            <span className="text-green-600 font-medium">Active</span>
+          </p>
         </div>
       </div>
     </div>

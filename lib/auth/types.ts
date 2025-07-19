@@ -21,8 +21,8 @@ export interface BusinessContext {
   readonly id: string;
   readonly name: string;
   readonly status: 'active' | 'inactive' | 'suspended';
-  readonly subscriptionTier: 'basic' | 'premium' | 'enterprise';
-  readonly subscriptionStatus: 'active' | 'expired' | 'canceled';
+  readonly subscriptionTier: 'free' | 'basic' | 'premium' | 'enterprise'; // Added 'free' tier
+  readonly subscriptionStatus: 'active' | 'expired' | 'canceled' | 'trial';
 }
 
 // Permission set

@@ -47,11 +47,15 @@ export function LoginForm() {
       { id: 'auth', name: 'Xác thực tài khoản', status: 'pending' },
       { id: 'profile', name: 'Tải thông tin người dùng', status: 'pending' },
       { id: 'business', name: 'Kiểm tra doanh nghiệp', status: 'pending' },
-      { id: 'permissions', name: 'Kiểm tra quyền truy cập', status: 'pending' },
+      { id: 'permissions', name: 'Tải quyền truy cập (Permission System v2.0)', status: 'pending' },
       { id: 'redirect', name: 'Chuyển hướng', status: 'pending' }
     ];
     setLoginSteps(steps);
-    optimizedLogger.info('INIT', 'Khởi tạo các bước đăng nhập', steps);
+    optimizedLogger.info('LOGIN_INIT', 'Khởi tạo quy trình đăng nhập với permissions', { 
+      steps: steps.length,
+      permissionSystemEnabled: true,
+      version: '2.0'
+    });
   };
 
   const updateStep = (stepId: string, status: LoginStep['status'], details?: string): void => {
@@ -63,11 +67,23 @@ export function LoginForm() {
     setCurrentStep(stepId);
     
     if (status === 'processing') {
-      optimizedLogger.info('STEP', `Bắt đầu bước: ${stepId}`, details);
+      optimizedLogger.info('LOGIN_STEP', `🔄 ${stepId} ${details || 'Đang xử lý'}`, { 
+        step: stepId, 
+        action: 'processing',
+        permissionSystemActive: stepId === 'permissions'
+      });
     } else if (status === 'completed') {
-      optimizedLogger.success('STEP', `Hoàn thành bước: ${stepId}`, details);
+      optimizedLogger.success('LOGIN_STEP', `✅ ${stepId} ${details || 'Hoàn thành'}`, {
+        step: stepId,
+        action: 'completed',
+        permissionSystemActive: stepId === 'permissions'
+      });
     } else if (status === 'error') {
-      optimizedLogger.error('STEP', `Lỗi tại bước: ${stepId}`, details);
+      optimizedLogger.error('LOGIN_STEP', `❌ ${stepId} ${details || 'Có lỗi xảy ra'}`, {
+        step: stepId,
+        action: 'error',
+        details
+      });
     }
   };
 
@@ -434,8 +450,9 @@ export function LoginForm() {
           
           // Continue with simple redirect after profile check/creation
           updateStep('business', 'completed', 'Bỏ qua kiểm tra business (fallback)');
-          updateStep('permissions', 'completed', 'Bỏ qua kiểm tra permissions (fallback)');
+          updateStep('permissions', 'completed', '⚠️ Permission System: Fallback mode (no permissions loaded)');
           updateStep('redirect', 'processing', 'Chuyển hướng dashboard');
+          optimizedLogger.warn('PERMISSIONS_FALLBACK', 'Permission system using fallback mode - no permissions loaded');
           optimizedLogger.success('PROFILE', 'Profile OK, chuyển hướng dashboard');
           optimizedLogger.success('LOGIN', 'Đăng nhập thành công (fallback mode)');
           router.push('/dashboard');
@@ -448,8 +465,9 @@ export function LoginForm() {
         // Ultimate fallback - just redirect to dashboard
         updateStep('profile', 'completed', 'Ultimate fallback');
         updateStep('business', 'completed', 'Bỏ qua tất cả kiểm tra');
-        updateStep('permissions', 'completed', 'Bỏ qua tất cả kiểm tra');
+        updateStep('permissions', 'completed', '🚨 Permission System: Emergency fallback (bypassed)');
         updateStep('redirect', 'processing', 'Chuyển hướng dashboard (fallback)');
+        optimizedLogger.error('PERMISSIONS_EMERGENCY', 'Permission system emergency fallback - all checks bypassed');
         optimizedLogger.warn('PROFILE', 'Ultimate fallback - chuyển hướng dashboard');
         router.push('/dashboard');
         return;
@@ -639,7 +657,16 @@ export function LoginForm() {
       const subscriptionStatus = businessObj?.subscription_status as string;
 
       updateStep('business', 'completed', `Business: ${businessName} (${subscriptionStatus})`);
-      updateStep('permissions', 'completed', `Role: ${userRole} (${Object.keys(permissionsObj || {}).length} permissions)`);
+      updateStep('permissions', 'completed', `🔐 Permission System v2.0: Role ${userRole} (${Object.keys(permissionsObj || {}).length} permissions loaded)`);
+
+      // Log detailed permission info
+      optimizedLogger.success('PERMISSIONS_LOADED', 'Permission system successfully loaded user permissions', {
+        userRole,
+        permissionCount: Object.keys(permissionsObj || {}).length,
+        businessId: businessId,
+        subscriptionTier: subscriptionStatus,
+        permissionSystemVersion: '2.0'
+      });
 
       // **TÍCH HỢP SESSION CACHE** - Cache session sau khi đăng nhập thành công
       try {
@@ -724,7 +751,11 @@ export function LoginForm() {
 
     } catch (error) {
       updateStep(currentStep || 'unknown', 'error', 'Lỗi không mong muốn');
-      optimizedLogger.error('LOGIN', 'Lỗi không mong muốn trong quá trình đăng nhập', error);
+      optimizedLogger.error('LOGIN_ERROR', 'Lỗi đăng nhập', {
+        step: currentStep,
+        permissionSystemActive: true,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
       const loginError = classifyError(error);
       setError(loginError);
     } finally {
