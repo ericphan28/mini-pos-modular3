@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { authPermissionBridge, initializePermissions } from '@/lib/permissions/auth-permission-integration';
 import type { 
   AuthContext, 
   AuthContextState, 
@@ -9,7 +10,8 @@ import type {
   AuthUser, 
   UserProfile, 
   BusinessContext, 
-  PermissionSet 
+  PermissionSet,
+  PermissionCache
 } from './types';
 
 // Auth state reducer actions
@@ -19,7 +21,9 @@ type AuthAction =
   | { type: 'SET_ERROR'; payload: string }
   | { type: 'CLEAR_SESSION' }
   | { type: 'CLEAR_ERROR' }
-  | { type: 'UPDATE_LAST_ACTIVITY' };
+  | { type: 'UPDATE_LAST_ACTIVITY' }
+  | { type: 'SET_PERMISSION_LOADING'; payload: boolean }
+  | { type: 'SET_PERMISSION_CACHE'; payload: PermissionCache };
 
 // Initial state
 const initialState: AuthContextState = {
@@ -27,6 +31,8 @@ const initialState: AuthContextState = {
   isAuthenticated: false,
   sessionData: null,
   error: null,
+  permissionCache: null,
+  permissionLoading: false,
 };
 
 // Auth reducer
@@ -68,6 +74,12 @@ function authReducer(state: AuthContextState, action: AuthAction): AuthContextSt
           lastActivity: new Date().toISOString(),
         },
       } : state;
+    
+    case 'SET_PERMISSION_LOADING':
+      return { ...state, permissionLoading: action.payload };
+    
+    case 'SET_PERMISSION_CACHE':
+      return { ...state, permissionCache: action.payload, permissionLoading: false };
     
     default:
       return state;
@@ -282,6 +294,27 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
         permissions: permissionsList
       });
 
+      // Validate permission count với actual database expectations
+      // Expected cho household_owner + free tier: 7 features, ~25 permissions total
+      if (userInfo.role === 'household_owner' && actualTier === 'free') {
+        console.log('🔐 [AUTH CONTEXT] Household owner validation:', {
+          expectedFeatures: 7,
+          actualFeatures: features.length,
+          expectedPermissionsRange: '20-28',
+          actualPermissions: permissionsList.length,
+          featuresMatch: features.length === 7,
+          permissionsInRange: permissionsList.length >= 20 && permissionsList.length <= 28
+        });
+        
+        if (features.length !== 7) {
+          console.warn('🔐 [AUTH CONTEXT] WARNING: Feature count mismatch for household_owner', {
+            expected: 7,
+            actual: features.length,
+            subscriptionTier: actualTier
+          });
+        }
+      }
+
       const permissions: PermissionSet = {
         role: userInfo.role || 'viewer',
         permissions: permissionsList,
@@ -304,6 +337,17 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
       // Save to cache and state
       saveCachedSession(sessionData);
       dispatch({ type: 'SET_SESSION', payload: sessionData });
+
+      // Generate permission cache asynchronously
+      try {
+        dispatch({ type: 'SET_PERMISSION_LOADING', payload: true });
+        const permissionCache = await initializePermissions(sessionData);
+        dispatch({ type: 'SET_PERMISSION_CACHE', payload: permissionCache });
+        console.log('🔐 [AUTH CONTEXT] Permission cache initialized:', permissionCache);
+      } catch (permissionError) {
+        console.error('🔐 [AUTH CONTEXT] Permission cache initialization failed:', permissionError);
+        dispatch({ type: 'SET_PERMISSION_LOADING', payload: false });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load session data';
       console.error('🔐 [AUTH CONTEXT] Session load error:', { 
@@ -407,6 +451,146 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
     dispatch({ type: 'CLEAR_ERROR' });
   }, []);
 
+  // ==================================================================================
+  // ENHANCED PERMISSION METHODS
+  // ==================================================================================
+
+  // Enhanced permission checking
+  const hasPermission = useCallback((permission: string): boolean => {
+    if (!state.sessionData) {
+      return false;
+    }
+
+    const { permissions } = state.sessionData;
+    
+    // Check if permission exists directly
+    if (permissions.permissions.includes(permission)) {
+      return true;
+    }
+
+    // Convert legacy format to database format and check
+    const databaseFormat = convertLegacyToDatabase(permission);
+    if (databaseFormat && permissions.permissions.includes(databaseFormat)) {
+      return true;
+    }
+
+    // Super admin or household_owner has all permissions
+    if (permissions.role === 'super_admin' || permissions.role === 'household_owner') {
+      return true;
+    }
+    
+    return false;
+  }, [state.sessionData]);
+
+  /**
+   * Convert legacy permission format to database format
+   */
+  const convertLegacyToDatabase = (permission: string): string | null => {
+    const legacyToDatabase: Record<string, string> = {
+      'staff_view': 'staff_management.read',
+      'staff_create': 'staff_management.write',
+      'staff_edit': 'staff_management.write',
+      'staff_delete': 'staff_management.delete',
+      'product_view': 'product_management.read',
+      'product_create': 'product_management.write',
+      'product_edit': 'product_management.write',
+      'product_delete': 'product_management.delete',
+      'financial_view': 'financial_tracking.read',
+      'report_view': 'basic_reports.read',
+      'pos_access': 'pos_interface.read'
+    };
+
+    return legacyToDatabase[permission] || null;
+  };
+
+  // Feature access checking
+  const hasFeatureAccess = useCallback((feature: string): boolean => {
+    if (!state.sessionData) {
+      return false;
+    }
+
+    const { permissions } = state.sessionData;
+
+    // Super admin or household_owner has all features
+    if (permissions.role === 'super_admin' || permissions.role === 'household_owner') {
+      return true;
+    }
+
+    // Check if feature exists in user's features list
+    const userFeatures = permissions.features || [];
+    return userFeatures.includes(feature);
+  }, [state.sessionData]);
+
+  // Route access checking  
+  const canAccessRoute = useCallback((route: string): boolean => {
+    if (!state.sessionData) {
+      return false;
+    }
+
+    const { permissions } = state.sessionData;
+
+    // Super admin or household_owner has all routes
+    if (permissions.role === 'super_admin' || permissions.role === 'household_owner') {
+      return true;
+    }
+
+    // Map routes to features
+    const routeToFeature: Record<string, string> = {
+      '/dashboard': 'dashboard',
+      '/staff': 'staff_management', 
+      '/products': 'product_management',
+      '/financial': 'financial_tracking',
+      '/reports': 'basic_reports',
+      '/pos': 'pos_interface',
+      '/inventory': 'inventory_management',
+      '/customer': 'customer_management'
+    };
+
+    const requiredFeature = routeToFeature[route];
+    if (!requiredFeature) {
+      return false; // Unknown route
+    }
+
+    // Check if user has the required feature
+    const userFeatures = permissions.features || [];
+    return userFeatures.includes(requiredFeature);
+  }, [state.sessionData]);
+
+  // Get user permissions
+  const getUserPermissions = useCallback((): Record<string, readonly string[]> => {
+    if (!state.permissionCache) {
+      return {};
+    }
+
+    return authPermissionBridge.getUserPermissions(state.permissionCache);
+  }, [state.permissionCache]);
+
+  // Get subscription limits
+  const getSubscriptionLimits = useCallback((): Record<string, boolean> => {
+    if (!state.permissionCache) {
+      return {};
+    }
+
+    return authPermissionBridge.getSubscriptionLimits(state.permissionCache);
+  }, [state.permissionCache]);
+
+  // Refresh permissions
+  const refreshPermissions = useCallback(async (): Promise<void> => {
+    if (!state.sessionData) {
+      return;
+    }
+
+    try {
+      dispatch({ type: 'SET_PERMISSION_LOADING', payload: true });
+      
+      const newCache = await authPermissionBridge.refreshPermissions(state.sessionData);
+      dispatch({ type: 'SET_PERMISSION_CACHE', payload: newCache });
+    } catch (error) {
+      console.error('Permission refresh failed:', error);
+      dispatch({ type: 'SET_PERMISSION_LOADING', payload: false });
+    }
+  }, [state.sessionData]);
+
   // Initialize session on mount
   useEffect(() => {
     let mounted = true;
@@ -478,6 +662,13 @@ export function AuthProvider({ children, initialSessionData }: AuthProviderProps
     checkPermission,
     refreshSession,
     clearError,
+    // Enhanced permission methods
+    hasPermission,
+    hasFeatureAccess,
+    getUserPermissions,
+    canAccessRoute,
+    refreshPermissions,
+    getSubscriptionLimits,
   };
 
   return (

@@ -23,6 +23,8 @@ export interface BusinessContext {
   readonly status: 'active' | 'inactive' | 'suspended';
   readonly subscriptionTier: 'free' | 'basic' | 'premium' | 'enterprise'; // Added 'free' tier
   readonly subscriptionStatus: 'active' | 'expired' | 'canceled' | 'trial';
+  readonly userRole?: string; // Add user role for permission integration
+  readonly rolePermissions?: Record<string, string[]>; // Add role-based permissions
 }
 
 // Permission set
@@ -48,6 +50,17 @@ export interface AuthContextState {
   readonly isAuthenticated: boolean;
   readonly sessionData: SessionData | null;
   readonly error: string | null;
+  readonly permissionCache: PermissionCache | null;
+  readonly permissionLoading: boolean;
+}
+
+// Permission cache for auth context
+export interface PermissionCache {
+  readonly lastUpdated: string;
+  readonly userPermissions: Record<string, readonly string[]>; // features -> permissions
+  readonly allowedRoutes: readonly string[];
+  readonly restrictedFeatures: readonly string[];
+  readonly subscriptionLimits: Record<string, boolean>;
 }
 
 // Auth context actions
@@ -57,6 +70,13 @@ export interface AuthContextActions {
   readonly checkPermission: (feature: string, action?: string) => boolean;
   readonly refreshSession: () => Promise<void>;
   readonly clearError: () => void;
+  // Enhanced permission methods
+  readonly hasPermission: (permission: string) => boolean;
+  readonly hasFeatureAccess: (feature: string) => boolean;
+  readonly getUserPermissions: () => Record<string, readonly string[]>;
+  readonly canAccessRoute: (route: string) => boolean;
+  readonly refreshPermissions: () => Promise<void>;
+  readonly getSubscriptionLimits: () => Record<string, boolean>;
 }
 
 // Complete auth context

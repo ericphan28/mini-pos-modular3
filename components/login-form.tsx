@@ -655,16 +655,33 @@ export function LoginForm() {
       const businessName = businessObj?.name as string;
       const userRole = userObj?.role as string;
       const subscriptionStatus = businessObj?.subscription_status as string;
+      const subscriptionTier = businessObj?.subscription_tier as string; // Fix: Get actual subscription tier
 
       updateStep('business', 'completed', `Business: ${businessName} (${subscriptionStatus})`);
-      updateStep('permissions', 'completed', `🔐 Permission System v2.0: Role ${userRole} (${Object.keys(permissionsObj || {}).length} permissions loaded)`);
+      
+      // Count actual permissions correctly (not just features)
+      const totalPermissions = Object.values(permissionsObj || {}).reduce((count: number, perms) => {
+        const permissions = perms as { can_read?: boolean; can_write?: boolean; can_delete?: boolean; can_manage?: boolean };
+        let featurePermCount = 0;
+        if (permissions.can_read) featurePermCount++;
+        if (permissions.can_write) featurePermCount++;
+        if (permissions.can_delete) featurePermCount++;
+        if (permissions.can_manage) featurePermCount++;
+        return count + featurePermCount;
+      }, 0);
+      
+      const featureCount = Object.keys(permissionsObj || {}).length;
+      
+      updateStep('permissions', 'completed', `🔐 Permission System v2.0: Role ${userRole} (${totalPermissions} permissions from ${featureCount} features loaded)`);
 
       // Log detailed permission info
       optimizedLogger.success('PERMISSIONS_LOADED', 'Permission system successfully loaded user permissions', {
         userRole,
-        permissionCount: Object.keys(permissionsObj || {}).length,
+        featureCount: featureCount,
+        permissionCount: totalPermissions, // Fix: Use actual permission count
         businessId: businessId,
-        subscriptionTier: subscriptionStatus,
+        subscriptionTier: subscriptionTier, // Fix: Use actual subscription tier, not status
+        subscriptionStatus: subscriptionStatus, // Add subscription status for clarity
         permissionSystemVersion: '2.0'
       });
 
